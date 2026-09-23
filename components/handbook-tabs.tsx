@@ -1,0 +1,2 @@
+import Link from "next/link";
+export function HandbookTabs({active}:{active:"rules"|"prompts"}){return <nav className="mb-8 flex gap-6 border-b border-zinc-200"><Link href="/handbook" className={`border-b-2 pb-3 ${active==="rules"?"border-orange-brand text-ink":"border-transparent text-zinc-500"}`}>作图规范</Link><Link href="/handbook/prompts" className={`border-b-2 pb-3 ${active==="prompts"?"border-orange-brand text-ink":"border-transparent text-zinc-500"}`}>提示词库</Link></nav>}

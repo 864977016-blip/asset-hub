@@ -1,0 +1,5 @@
+const {PGlite}=require('@electric-sql/pglite');const fs=require('fs');
+(async()=>{const db=new PGlite();await db.exec(`create role anon; create role authenticated; create schema auth; create table auth.users(id uuid primary key,email text,raw_user_meta_data jsonb); create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$; grant usage on schema auth to authenticated; grant execute on function auth.uid() to authenticated;`);
+let schema=fs.readFileSync('supabase/schema.sql','utf8').split('-- Shared materials extension')[0].replace('create extension if not exists pgcrypto;','');await db.exec(schema);
+for(const name of ['20260919_shared_assets.sql','20260919_r2_image_assets.sql','20260921_inspiration_details_activities.sql','20260921_archived_asset_store_read.sql','20260923_v1_closeout.sql']){console.log('apply local',name);await db.exec(fs.readFileSync('supabase/migrations/'+name,'utf8'));}
+console.log('local migrations OK');await db.close();})().catch(e=>{console.error(e.message,e.query?.slice(0,200));process.exitCode=1;});

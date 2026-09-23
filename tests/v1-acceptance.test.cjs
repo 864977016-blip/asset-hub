@@ -1,0 +1,39 @@
+const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),assert=require('node:assert/strict'),test=require('node:test'),ts=require('typescript'),React=require('react'),{renderToString}=require('react-dom/server');
+const root=path.resolve(__dirname,'..');
+function loader(overrides={},globals={}){const cache=new Map();return function load(file){file=path.resolve(root,file);if(cache.has(file))return cache.get(file);const ctx={exports:{},File,FormData,URL,process:{env:{NODE_ENV:'test'}},...globals,require(name){if(name==="server-only")return {};if(["@/app/asset-operations","@/app/handbook-actions"].includes(name))return new Proxy({},{get:()=>async()=>{}});if(Object.hasOwn(overrides,name))return overrides[name];if(name.startsWith('@/')||name.startsWith('./')){const target=name.startsWith('@/')?path.resolve(root,name.slice(2)):path.resolve(path.dirname(file),name);return load(target+(fs.existsSync(target+'.tsx')?'.tsx':'.ts'));}return require(name)}};vm.runInNewContext(ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText,ctx,{filename:file});cache.set(file,ctx.exports);return ctx.exports;};}
+const plain=value=>JSON.parse(JSON.stringify(value));
+
+function db(rows={}, user={id:'u'}) { const calls=[]; return {calls, auth:{getUser:async()=>({data:{user},error:null})}, from(table){const call={table,filters:[]};calls.push(call);const q={select(v){call.select=v;return q},eq(...v){call.filters.push(v);return q},is(...v){call.filters.push(v);return q},or(v){call.or=v;return q},ilike(...v){call.ilike=v;return q},order(){return q},limit(v){call.limit=v;return q},maybeSingle(){return Promise.resolve({data:(rows[table]||[])[0]||null,error:null})},then(resolve,reject){return Promise.resolve({data:rows[table]??null,error:null}).then(resolve,reject)}};return q;} }; }
+function dataLayer(client){return loader({'./handbook-data':{searchHandbookModules:async()=>({handbook:[],prompts:[]})},'./supabase/server':{isSupabaseConfigured:()=>true,createClient:async()=>client}})('lib/data.ts');}
+
+test('store aggregation reads its junction, deduplicates by kind/id and preserves full shared detail',async()=>{
+ const shared={id:'same',description:'备注',created_at:'2026-09-22',preview_file:[{id:'file'}],shared_asset_stores:[{store_id:'shop',stores:{id:'shop',name:'店'}}],shared_asset_workstations:[{workstations:{id:'2'}}]};
+ const client=db({store_assets:[{id:'same',created_at:'2026-09-21',store_id:'shop',store_asset_tags:null}],shared_asset_stores:[{asset:shared},{asset:[shared]},{asset:null}]});
+ const result=await dataLayer(client).getStoreAssets('shop');assert.equal(result.length,2);assert.equal(result[0].kind,'shared');assert.equal(result[0].image,'/api/media/file');assert.equal(result[0].workstations[0].id,2);assert.equal(result[0].stores[0].id,'shop');assert.deepEqual(plain(client.calls[1].filters),[['store_id','shop']]);
+ assert.equal((await dataLayer(db()).getStoreAssets('shop')).length,0);
+});
+test('home and store overview use the same exact own plus shared counts with null-safe aggregates',async()=>{
+ const data=dataLayer(db({stores:[{id:'shop',name:'店',asset_count:[{count:3}],shared_count:{count:2},asset_summary:null},{id:'empty',asset_count:null,shared_count:null}]}));
+ assert.deepEqual(plain(await data.getHomeStores()),plain(await data.getStores()));assert.equal((await data.getStores())[0].count,5);assert.equal((await data.getStores())[1].count,0);
+});
+test('store all includes shared, categories and tags match only own assets even with legacy shared tags',()=>{
+ const f=loader()('lib/asset-filters.ts');const own={id:'a',kind:'store',assetCategory:'other',tags:[{id:'tag'}]},shared={id:'b',kind:'shared',assetCategory:'other',tags:[{id:'tag'}]};
+ assert.equal(f.filterAssets([own,shared], 'all').length,2);assert.deepEqual(plain(f.filterAssets([own,shared],'other')), [own]);assert.deepEqual(plain(f.filterAssets([own,shared],'all',['tag'])),[own]);assert.equal(f.filterAssets(null,'all',null).length,0);
+});
+test('search avoids empty queries, requires auth and returns five typed groups without storage keys',async()=>{
+ const empty=db();assert.deepEqual(plain(await dataLayer(empty).searchAssets('  ')),{inspirations:[],shared:[],assets:[],stores:[],tags:[]});assert.equal(empty.calls.length,0);
+ const denied=db({},null);await assert.rejects(dataLayer(denied).searchAssets('test'),/登录/);assert.equal(denied.calls.length,0);
+ const client=db({inspirations:[{id:'i',title:'abc',inspiration_tags:null}],shared_assets:[{id:'s',preview_file:{id:'f'},description:'abc'}],store_assets:[{id:'a',store_id:'shop',asset_files:[{id:'f2'}]}],stores:[{id:'shop',name:'abc'}],tags:[{id:'tag',name:'abc'}]});const result=await dataLayer(client).searchAssets('abc,\"%');assert.equal(Object.keys(result).length,9);assert.equal(result.shared[0].image,'/api/media/f');assert.equal(result.assets[0].kind,'store');assert.equal(result.inspirations[0].image,'/api/inspirations/i/image');assert.ok(client.calls.every(c=>c.limit===6));assert.ok(client.calls.every(c=>!c.select.includes('storage_key')));assert.ok(client.calls[0].or.includes('title.ilike."'));assert.deepEqual(plain(client.calls.find(c=>c.table==='stores').filters),[['archived_at',null]]);
+ assert.deepEqual(plain(await dataLayer(db()).searchAssets('abc')), {inspirations:[],shared:[],assets:[],stores:[],tags:[],handbook:[],prompts:[],storeTags:[],promptTags:[]});
+});
+test('all AppShell destinations render the same functioning provider, search input and plus without bell',async()=>{
+ const options={stores:[],tags:[],workstations:[]};const mocks={'@/lib/data':{getV1Ready:async()=>true,getSidebarData:async()=>({profile:{displayName:'用户',role:'member'},stores:[]}),getTags:async()=>[],getWorkstations:async()=>[],getActiveStoreOptions:async()=>[]},'@/app/actions':new Proxy({},{get:()=>async()=>{}}),'@/app/search-actions':{searchAll:async()=>({})},'next/navigation':{useRouter:()=>({refresh(){}}),usePathname:()=>'/library'}};
+ const load=loader(mocks);const {AppShell}=load('components/app-shell.tsx');
+ for(const active of ['首页','素材库','共享素材','店铺','工作站','标签']){const element=await AppShell({active,children:React.createElement('p',null,'content')});const html=renderToString(element);assert.ok(html.includes('aria-label="新增素材"'));assert.ok(html.includes('aria-label="搜索灵感、资产、标签"'));assert.ok(!html.includes('aria-label="通知"'));}
+ const {AssetBrowser}=load('components/asset-browser.tsx');const {InspirationBrowser}=load('components/inspiration-browser.tsx');for(const items of [null,undefined,[],[null]]){assert.doesNotThrow(()=>renderToString(React.createElement(AssetBrowser,{assets:items,...options,kind:'store'})));assert.doesNotThrow(()=>renderToString(React.createElement(InspirationBrowser,{inspirations:items,tags:[]})));}
+ const html=renderToString(React.createElement(load('components/inspiration-card.tsx').InspirationCard,{item:{id:'a',image:'/api/test',title:'长图',ratio:'tall'}}));assert.ok(html.includes('h-auto w-full'));assert.ok(!html.includes('object-cover'));assert.ok(!html.includes('aspect-'));
+});
+test('page drop and clipboard do not open a second modal while global upload is active',()=>{
+ const listeners=new Map();const react={useEffect:fn=>fn(),useState:x=>[x,()=>{}],useRef:()=>({current:0})};let received=0,prevented=0;
+ const hooks=loader({react},{window:{addEventListener:(name,fn)=>listeners.set(name,fn),removeEventListener(){}},document:{querySelector:()=>({})}})('components/image-drop-zone.tsx');hooks.usePageImageDrop(()=>received++);hooks.useClipboardImage(()=>received++);const event={preventDefault:()=>prevented++,stopPropagation(){}};listeners.get('drop')(event);listeners.get('paste')(event);assert.equal(received,0);assert.equal(prevented,0);
+});

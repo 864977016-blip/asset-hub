@@ -1,0 +1,15 @@
+"use server";
+import {session,fail,refreshAssets,drainCleanup} from "@/lib/action-utils";
+import {optimizeAndUploadImage,removeObject} from "@/lib/r2";
+export async function savePrompt(id:string|null,form:FormData){const {s}=await session();const {data,error}=await s.rpc("v1_save_prompt",{p_id:id,p_content:String(form.get("content")||""),p_visibility:String(form.get("visibility")||"team"),p_tags:form.getAll("tag_ids").map(String)});if(error)fail(error);refreshAssets();return data as string}
+export async function deletePrompt(id:string){const {s}=await session();const {error}=await s.from("prompts").delete().eq("id",id).select("id").single();if(error)fail(error);refreshAssets()}
+export async function favoritePrompt(id:string,favorite:boolean){const {s,user}=await session();const result=favorite?await s.from("prompt_favorites").upsert({prompt_id:id,user_id:user.id},{onConflict:"prompt_id,user_id",ignoreDuplicates:true}):await s.from("prompt_favorites").delete().eq("prompt_id",id).eq("user_id",user.id);if(result.error)fail(result.error);refreshAssets()}
+export async function changeProduct(action:string,id:string|null,name=""){const {s}=await session(true);const {data,error}=await s.rpc("v1_handbook_product",{p_action:action,p_id:id,p_name:name});if(error)fail(error);refreshAssets();if(action==="delete")await drainCleanup();return data as string}
+export async function reorderHandbook(kind:"product"|"note",id:string,direction:number){const {s}=await session(true);const {error}=await s.rpc("v1_reorder",{p_kind:kind,p_id:id,p_direction:direction});if(error)fail(error);refreshAssets()}
+export async function deleteNote(id:string){const {s}=await session(true);const {error}=await s.from("handbook_notes").delete().eq("id",id).select("id").single();if(error)fail(error);refreshAssets();await drainCleanup()}
+export async function saveNote(id:string|null,productId:string,form:FormData){const {s}=await session(true);const content=String(form.get("content")||"").trim();if(!content)throw new Error("注意事项正文不能为空");const uploaded:Awaited<ReturnType<typeof optimizeAndUploadImage>>[]=[];try{
+ for(const file of form.getAll("images")){if(file instanceof File&&file.size)uploaded.push(await optimizeAndUploadImage(file,"handbook"))}
+ const {data,error}=await s.rpc("v1_save_note",{p_id:id,p_product:productId,p_content:content,p_keep:form.getAll("keep_images").map(String),p_files:uploaded});if(error)fail(error);refreshAssets();await drainCleanup();return data as string;
+}catch(error){for(const image of uploaded){const {data,error:readError}=await s.from("asset_files").select("id").eq("storage_key",image.key);if(!readError&&data?.length===0)await removeObject(image.key).catch(e=>console.error("[note upload cleanup]",e));}throw error}}
+
+export async function readPrompt(id:string){const {s}=await session();const {promptSelect,normalizePrompt}=await import("@/lib/handbook-data");const {data,error}=await s.from("prompts").select(promptSelect).eq("id",id).single();if(error)fail(error);return normalizePrompt(data)}

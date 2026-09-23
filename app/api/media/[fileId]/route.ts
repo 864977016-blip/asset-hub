@@ -1,0 +1,4 @@
+import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+import { readObject } from "@/lib/r2";
+export async function GET(_: Request, { params }: { params: Promise<{ fileId: string }> }) { const s = await createClient(); const { data: { user } } = await s.auth.getUser(); if (!user) return new NextResponse("Unauthorized", { status: 401 }); const { fileId } = await params; const { data: file } = await s.from("asset_files").select("storage_key,mime_type").eq("id", fileId).maybeSingle(); if (!file) return new NextResponse("Not found", { status: 404 }); try { const object = await readObject(file.storage_key); return new NextResponse(object.bytes.buffer as ArrayBuffer, { headers: { "Content-Type": object.contentType, "Cache-Control": "private, max-age=3600" } }); } catch { return new NextResponse("Not found", { status: 404 }); } }

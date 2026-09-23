@@ -1,0 +1,67 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+html { background: #f7f7f5; }
+body { margin: 0; min-width: 320px; background: #f7f7f5; color: #171717; font-family: "Noto Sans SC", Inter, system-ui, sans-serif; }
+button, input { font: inherit; }
+::-webkit-scrollbar { width: 10px; }
+::-webkit-scrollbar-thumb { background: #d6d6d3; border: 3px solid #f7f7f5; border-radius: 999px; }
+
+@layer components {
+  .round-button { @apply inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-4 py-2.5 text-sm font-medium text-ink shadow-card transition hover:bg-zinc-50; }
+  .section-heading { @apply text-xl font-bold tracking-tight text-ink; }
+  .meta-pill { @apply rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-xs font-medium text-zinc-500; }
+}
+
+/* Both inspiration walls use the same available-width masonry algorithm.
+   Automatic column count; never override it with viewport/container breakpoints. */
+.inspiration-masonry { width: 100%; min-width: 0; column-width: 14rem; column-count: auto; column-gap: 1.5rem; }
+
+/* Keep sidebar visibility and its reserved space under the same breakpoint. */
+.app-shell { width: 100%; min-width: 0; padding-left: 0; }
+.app-sidebar { display: none; overflow-y: auto; overscroll-behavior: contain; gap: 2rem; max-width: calc(100vw - 2rem); }
+.app-sidebar > * { flex-shrink: 0; }
+.sidebar-toggle { position: fixed; top: .75rem; left: 1.25rem; z-index: 51; display: grid; place-items: center; width: 2.5rem; height: 2.5rem; border: 1px solid #e4e4e7; border-radius: .5rem; background: white; color: #171717; }
+.sidebar-backdrop { position: fixed; inset: 0; z-index: 45; background: rgb(0 0 0 / .25); }
+.app-shell[data-sidebar-open="true"] .app-sidebar { display: flex; padding-top: 4.5rem; animation: sidebar-enter 160ms ease-out; }
+@keyframes sidebar-enter { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+@media (prefers-reduced-motion: reduce) { .app-shell[data-sidebar-open="true"] .app-sidebar { animation: none; } }
+.app-header { padding-left: 4.5rem; }
+.global-search-results { width: min(32rem, calc(100vw - 5.75rem)); overflow-wrap: anywhere; }
+@media (min-width: 1024px) {
+  .app-shell { padding-left: 18rem; }
+  .app-sidebar, .app-shell[data-sidebar-open="true"] .app-sidebar { display: flex; padding-top: 2rem; animation: none; }
+  .sidebar-toggle, .sidebar-backdrop { display: none; }
+  .app-header { padding-left: 2rem; }
+  .global-search-results { width: min(32rem, calc(100vw - 22rem)); }
+}
+.app-header, .app-main { min-width: 0; width: 100%; }
+.app-main { container: workspace / inline-size; overflow-wrap: anywhere; }
+.app-main > *, .content-grid > *, .handbook-layout > * { min-width: 0; }
+.app-main > section.flex { flex-wrap: wrap; gap: 1rem; }
+.app-main > section.flex > div { min-width: 0; }
+.content-grid { display: grid; grid-template-columns: minmax(0, 1fr); }
+@container workspace (min-width: 30rem) {
+  .content-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container workspace (min-width: 48rem) {
+  .grid-three, .grid-four { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .handbook-layout { grid-template-columns: 240px minmax(0, 1fr); }
+  .handbook-sidebar { border-right: 1px solid #e4e4e7; padding-right: 1.5rem; }
+}
+@container workspace (min-width: 60rem) {
+  .grid-four, .grid-workstations { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@container workspace (min-width: 72rem) {
+  .grid-prompts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+/* Native top-layer menus escape clipping ancestors and scrollable modals. */
+.action-menu { position: fixed; inset: auto; margin: 0; min-width: 9rem; max-width: calc(100vw - 1rem); max-height: calc(100dvh - 1rem); overflow: auto; }
+.action-menu button, .action-menu a { white-space: nowrap; }
+dialog { max-width: calc(100vw - 2rem); max-height: 90dvh; overflow-wrap: anywhere; }
+dialog fieldset, dialog .grid > * { min-width: 0; }
+dialog img { max-width: 100%; }

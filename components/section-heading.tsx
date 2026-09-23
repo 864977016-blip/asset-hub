@@ -1,0 +1,2 @@
+import Link from "next/link";
+export function SectionHeading({ title, detail, action, href }: { title: string; detail: string; action?: string; href?: string }) { return <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div className="flex min-w-0 flex-wrap items-center gap-2"><h2 className="section-heading">{title}</h2><span className="meta-pill">{detail}</span></div>{action && href && <Link href={href} className="text-sm text-zinc-500 transition hover:text-orange-brand">{action} →</Link>}</div>; }
