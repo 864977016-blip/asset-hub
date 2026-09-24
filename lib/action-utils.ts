@@ -1,12 +1,13 @@
 import "server-only";
-import { createClient } from "./supabase/server";
-import { removeObject } from "./r2";
+import { createClient } from "@/lib/supabase/server";
+import { removeObject } from "@/lib/r2";
 import { userError } from "./user-error";
 import { revalidatePath } from "next/cache";
 export async function session(adminOnly = false) {
   const s = await createClient(); const { data: { user } } = await s.auth.getUser();
   if (!user) throw new Error("你目前没有权限执行此操作。");
-  const { data: profile } = await s.from("profiles").select("role").eq("id",user.id).single();
+  const { data: profile, error } = await s.from("profiles").select("role,is_disabled").eq("id",user.id).single();
+  if (error || !profile || profile.is_disabled !== false) throw new Error("账号不可用，请联系管理员。");
   if (adminOnly && profile?.role !== "admin") throw new Error("你目前没有权限执行此操作。");
   return { s, user, isAdmin: profile?.role === "admin" };
 }

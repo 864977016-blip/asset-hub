@@ -3,7 +3,8 @@ import { relationOne } from "@/lib/relation-values";
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { optimizeAndUploadImage, removeObject } from "@/lib/r2";
-async function admin() { const s=await createClient(); const {data:{user}}=await s.auth.getUser(); if(!user) throw new Error("未登录"); const {data}=await s.from("profiles").select("role").eq("id",user.id).single(); if(data?.role!=="admin") throw new Error("需要管理员权限"); return s; }
+import { session } from "@/lib/action-utils";
+async function admin() { return (await session(true)).s; }
 const slug=(v:string)=>`${v.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g,"-").replace(/^-|-$/g,"")}-${Date.now().toString(36)}`;
 const refreshStoreViews = () => { revalidatePath("/", "layout"); revalidatePath("/stores"); };
 export async function createStore(form:FormData){const s=await admin();const name=String(form.get("name")||"").trim();if(!name)throw new Error("店铺名称不能为空");const {data:{user}}=await s.auth.getUser();const {error}=await s.from("stores").insert({name,slug:slug(name),description:String(form.get("description")||""),created_by:user!.id});if(error)throw new Error(error.message||"无法创建店铺");refreshStoreViews();}
@@ -21,7 +22,7 @@ export async function updateWorkstation(id:number,form:FormData) {
 
 
 
-async function userClient() { const s=await createClient(); const {data:{user}}=await s.auth.getUser(); if(!user) throw new Error("未登录"); return { s, user }; }
+async function userClient() { return session(); }
 async function recordActivity(s: Awaited<ReturnType<typeof createClient>>, actorId: string, targetType: string, targetId: string, action: string) {
   // Audit failures must never trigger cleanup of an already saved asset.
   try {

@@ -3,6 +3,26 @@ const root=path.resolve(__dirname,'..');
 function loader(overrides={},globals={}){const cache=new Map();return function load(file){file=path.resolve(root,file);if(cache.has(file))return cache.get(file);const ctx={exports:{},File,FormData,URL,process:{env:{NODE_ENV:'test'}},...globals,require(name){if(name==="server-only")return {};if(["@/app/asset-operations","@/app/handbook-actions"].includes(name))return new Proxy({},{get:()=>async()=>{}});if(Object.hasOwn(overrides,name))return overrides[name];if(name.startsWith('@/')||name.startsWith('./')){const target=name.startsWith('@/')?path.resolve(root,name.slice(2)):path.resolve(path.dirname(file),name);return load(target+(fs.existsSync(target+'.tsx')?'.tsx':'.ts'));}return require(name)}};vm.runInNewContext(ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText,ctx,{filename:file});cache.set(file,ctx.exports);return ctx.exports;};}
 const plain=value=>JSON.parse(JSON.stringify(value));
 
+test('member management entry is admin-only and last admin action is disabled in the lightweight list',()=>{
+ const load=uiLoader(),{SidebarNav}=load('components/sidebar-nav.tsx');
+ const sidebar=role=>renderToString(React.createElement(SidebarNav,{active:'首页',profile:{id:'u',displayName:'User',role},stores:[]}));
+ assert.ok(sidebar('member').includes('退出登录'));assert.ok(sidebar('admin').includes('退出登录'));assert.ok(!sidebar('member').includes('/members'));assert.ok(sidebar('admin').includes('/members'));
+ const {MemberManagement}=load('components/member-management.tsx');
+ const html=renderToString(React.createElement(MemberManagement,{members:[{id:'u',display_name:'Admin',email:'admin@example.test',role:'admin'}],invitations:[],currentUserId:'u'}));
+ assert.ok(html.includes('生成邀请码'));assert.ok(html.includes('至少保留一名正常状态的管理员'));assert.ok(html.includes('disabled=""'));assert.ok(html.includes('admin@example.test'));
+});
+
+test('handbook directory keeps general and product heading peers with indented product actions',()=>{
+ const load=uiLoader();const {TeamProvider}=load('components/team-context.tsx'),{HandbookBrowser}=load('components/handbook-browser.tsx');
+ const products=[{id:'general',name:'通用规范',general:true,notes:[]},{id:'product',name:'产品 A long name',general:false,notes:[]}];
+ const render=role=>renderToString(React.createElement(TeamProvider,{ready:true,profile:{id:'u',displayName:'用户',role},tags:[],storeTags:[],promptTags:[]},React.createElement(HandbookBrowser,{products,initialProduct:'product'})));
+ for(const role of ['member','admin']){
+  const html=render(role),nav=html.split('aria-label="作图规范目录"')[1].split('</nav>')[0];
+  assert.ok(nav.includes('text-sm font-semibold'));assert.ok(nav.includes('<h2 class="px-3 py-3 text-sm font-semibold text-ink">产品规范</h2>'));
+  const group=nav.split('aria-label="产品规范"')[1];assert.ok(!group.includes('通用规范'));assert.ok(group.includes('ml-4 min-w-0'));assert.ok(group.includes('aria-current="page"'));assert.ok(group.includes('text-sm font-normal'));assert.equal(group.includes('+ 新建产品'),role==='admin');
+ }
+});
+
 test('non-owner shared removal entry appears only in an associated store context',()=>{
  const load=uiLoader();const {TeamProvider}=load('components/team-context.tsx'),{AssetCommands}=load('components/asset-commands.tsx');
  const render=(kind,currentStore,role='member')=>renderToString(React.createElement(TeamProvider,{ready:true,profile:{id:'b',displayName:'B',role},tags:[],storeTags:[],promptTags:[]},React.createElement(AssetCommands,{kind,item:{id:'a',createdBy:'a',stores:[{id:'s',name:'Store'}]},currentStore,onClose(){}})));
@@ -43,4 +63,11 @@ test('handbook Header hides global plus; final sidebar contains no shared/tag/se
 });
 test('move reconciles a lost committed response while confirmed transaction failure retains original',async()=>{
  for(const scenario of ['rollback','committed']){let refreshed=0;const client={rpc:async()=>({error:{message:'connection lost'}}),from(table){const q={select(){return q},eq(){return q},maybeSingle:async()=>({error:null,data:table===(scenario==='rollback'?'store_assets':'shared_assets')?{id:'a'}:null})};return q;}};const actions=loader({'@/lib/action-utils':{session:async()=>({s:client}),refreshAssets:()=>refreshed++,fail:e=>{throw e},drainCleanup:async()=>{}}},{console:{error(){}}})('app/asset-operations.ts');if(scenario==='rollback'){await assert.rejects(actions.moveAsset('store','a',new FormData()),/移动失败，原素材未改变/);assert.equal(refreshed,0)}else{await actions.moveAsset('store','a',new FormData());assert.equal(refreshed,1)}}
+});
+
+test('member list distinguishes disabled status, pending counts and last active admin without exposing private content',()=>{
+ const load=uiLoader(),{MemberManagement}=load('components/member-management.tsx');
+ const html=renderToString(React.createElement(MemberManagement,{members:[{id:'a',display_name:'ActiveAdmin',email:'a@test',role:'admin',is_disabled:false,pending_private_count:0},{id:'b',display_name:'DisabledAdmin',email:'b@test',role:'admin',is_disabled:true,pending_private_count:3}],invitations:[],currentUserId:'a'}));
+ assert.ok(html.replace(/<!--.*?-->/g,'').includes('Admin · 正常'));assert.ok(html.replace(/<!--.*?-->/g,'').includes('Admin · 已停用'));assert.ok(html.includes('待交接 Private Prompt'));assert.ok(html.includes('重新启用'));assert.ok(html.includes('交接数据'));assert.ok(html.includes('至少保留一名正常状态的管理员'));
+ assert.equal((html.match(/设为普通成员/g)||[]).length,1);assert.equal((html.match(/停用成员/g)||[]).length,1);
 });

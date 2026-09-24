@@ -46,7 +46,7 @@ test('shared store filters and workstation filters have different semantics', ()
 
 function database() {
   const tables = {
-    profiles: [{ id: 'u', role: 'admin' }],
+    profiles: [{ id: 'u', role: 'admin', is_disabled:false }],
     stores: [{ id: 'a', name: 'A', archived_at: null }, { id: 'b', name: 'B', archived_at: null }, { id: 'old', name: 'Old', archived_at: '2026' }],
     workstations: [{ id: 2, current_user_name: '小李', note: '历史备注' }, { id: 5, current_user_name: '小王' }],
     shared_assets: [{ id: 's', asset_type: 'legacy', description: 'old' }],
@@ -132,7 +132,7 @@ test('workstation rename is admin-only and updates no notes or asset relations',
   assert.equal(d.tables.shared_asset_workstations[0].workstation_id, 2);
   assert.deepEqual(Object.keys(d.calls.find(call => call.operation === 'update').payload), ['current_user_name']);
   d.tables.profiles[0].role = 'member';
-  await assert.rejects(d.actions.updateWorkstation(2, form()), /管理员权限/);
+  await assert.rejects(d.actions.updateWorkstation(2, form()), /没有权限/);
 });
 
 test('null-safe shared/workstation rendering hides removed fields and preserves existing store details', () => {

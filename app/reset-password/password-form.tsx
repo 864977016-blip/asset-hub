@@ -1,0 +1,11 @@
+"use client";
+import Link from "next/link";
+import {useState} from "react";
+import {createClient} from "@/lib/supabase/client";
+import {authError,passwordError} from "@/lib/auth-flow";
+export function ResetPasswordForm({valid}:{valid:boolean}){
+ const [pending,setPending]=useState(false),[error,setError]=useState(""),[success,setSuccess]=useState(false),[signedOut,setSignedOut]=useState(false);
+ if(!valid)return <div className="mt-8 space-y-4"><p role="alert" className="text-sm text-zinc-600">重置链接无效或已过期。请重新申请，并在申请时使用的浏览器中打开最新邮件链接。</p><Link href="/forgot-password" className="inline-block text-sm text-orange-brand">重新发送重置邮件</Link></div>;
+ if(success)return <div className="mt-8 space-y-4"><p role="status" className="text-sm">密码已更新。{signedOut?"请使用新密码登录。":"你可以返回应用继续使用。"}</p><Link href={signedOut?"/login":"/"} className="inline-block text-orange-brand">{signedOut?"返回登录":"返回应用"}</Link></div>;
+ return <form noValidate className="mt-8 space-y-4" onSubmit={async event=>{event.preventDefault();if(pending)return;const form=event.currentTarget,data=new FormData(form),password=String(data.get("password")||""),invalid=passwordError(password,String(data.get("confirmation")||""));setError(invalid);if(invalid)return;setPending(true);try{const auth=createClient().auth;const {error}=await auth.updateUser({password});if(error)throw error;form.reset();setSuccess(true);try{const {error}=await auth.signOut({scope:"local"});setSignedOut(!error)}catch{setSignedOut(false)}}catch(e){setError(authError(e,"密码更新失败，请重试或重新申请重置邮件。"))}finally{setPending(false)}}}><label className="block text-sm">新密码<input name="password" type="password" autoComplete="new-password" minLength={8} required disabled={pending} className="mt-2 w-full rounded-xl border px-4 py-3"/></label><label className="block text-sm">确认新密码<input name="confirmation" type="password" autoComplete="new-password" required disabled={pending} className="mt-2 w-full rounded-xl border px-4 py-3"/></label><p className="text-xs text-zinc-500">至少 8 位，建议混合大小写字母、数字和符号。</p>{error&&<p role="alert" className="text-sm text-red-600">{error}</p>}<button disabled={pending} className="w-full rounded-full bg-orange-brand py-3 text-white disabled:opacity-60">{pending?"保存中…":"保存新密码"}</button></form>;
+}
