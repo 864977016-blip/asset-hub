@@ -56,12 +56,19 @@ button, input { font: inherit; }
 @container workspace (min-width: 60rem) {
   .grid-four, .grid-workstations { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
-@container workspace (min-width: 72rem) {
-  .grid-prompts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
+
 /* Native top-layer menus escape clipping ancestors and scrollable modals. */
 .action-menu { position: fixed; inset: auto; margin: 0; min-width: 9rem; max-width: calc(100vw - 1rem); max-height: calc(100dvh - 1rem); overflow: auto; }
 .action-menu button, .action-menu a { white-space: nowrap; }
 dialog { max-width: calc(100vw - 2rem); max-height: 90dvh; overflow-wrap: anywhere; }
 dialog fieldset, dialog .grid > * { min-width: 0; }
 dialog img { max-width: 100%; }
+
+/* Content-width layouts: no row-height coupling for prompts. */
+.prompt-masonry { min-width: 0; column-width: 22rem; column-count: auto; column-gap: 1.25rem; }
+.home-store-row { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 1.5rem; min-width: 0; }
+.home-store-row > * { min-width: 0; }
+.workstation-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+.workstation-row > * { min-width: 0; }
+@container workspace (min-width: 30rem) { .workstation-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container workspace (min-width: 48rem) { .workstation-row { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
