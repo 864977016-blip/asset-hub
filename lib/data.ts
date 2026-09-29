@@ -1,5 +1,5 @@
 import { arrayOrEmpty, relationOne, relationMany } from "./relation-values";
-import type { Activity, AssetDetail, StoreOption, WorkstationOverview, Inspiration, Store, SearchResults } from "./types";
+import type { Activity, AssetDetail, StoreOption, WorkstationOverview, Inspiration, Store, SearchResults, ParentProduct, ProductTag } from "./types";
 import { createClient, isSupabaseConfigured } from "./supabase/server";
 
 export async function getInspirations() { if (!isSupabaseConfigured()) return []; const s = await createClient(); const { data, error } = await s.from("inspirations").select("id,created_by,title,image_url,source_name,source_url,source_domain,created_at,inspiration_tags(tags(id,name,group_name,color))").order("created_at", { ascending: false }); if (error) throw new Error(error.message); return (data ?? []).map((x: any) => ({ id:x.id, createdBy:x.created_by, title:x.title || "未命名灵感", image:x.image_url, source:x.source_name || x.source_domain || "未记录", sourceUrl:x.source_url, sourceDomain:x.source_domain, createdAt:x.created_at, tags:arrayOrEmpty<any>(x.inspiration_tags).map(join => relationOne<any>(join.tags)).filter(Boolean), ratio:"medium" as const })); }
@@ -15,8 +15,8 @@ export async function getTags(scope: "inspiration" | "store" | "prompt" = "inspi
 }
 export async function getWorkstations() { if (!isSupabaseConfigured()) return Array.from({length:8},(_,i)=>({id:i+1,current_user_name:null,note:null})); const s = await createClient(); const { data } = await s.from("workstations").select("*").order("id"); return data ?? []; }
 export async function getSidebarData(realOnly = false) { if (!isSupabaseConfigured()) return { profile: { displayName: "用户", role: "member" as const }, stores: [] }; const s = await createClient(); const [{ data: { user } }, { data: stores }] = await Promise.all([s.auth.getUser(), s.from("stores").select("id,name,description,store_assets(count),shared_count:shared_asset_stores(count)").is("archived_at", null).order("updated_at", { ascending: false })]); const { data: profile } = user ? await s.from("profiles").select("display_name,role").eq("id", user.id).maybeSingle() : { data: null }; const fallbackName = user?.email?.split("@")[0] || "用户"; return { profile: { id: user?.id, displayName: profile?.display_name?.trim() || fallbackName, role: profile?.role === "admin" ? "admin" as const : "member" as const }, stores: (stores ?? []).map((x: any) => ({ id:x.id, name:x.name, count:Number(relationOne<any>(x.store_assets)?.count || 0) + Number(relationOne<any>(x.shared_count)?.count || 0), recent:x.description || "尚无资产", cover:"" })) }; }
-export async function getStoreById(id: string) { if (!isSupabaseConfigured()) return null; const s = await createClient(); const { data } = await s.from("stores").select("id,name,description").eq("id", id).is("archived_at", null).maybeSingle(); return data; }
-const storeAssetSelect = "id,created_by,store_id,asset_category,created_at,updated_at,store:stores!store_assets_store_id_fkey(id,name,archived_at),asset_files!asset_files_store_asset_id_fkey(id),store_asset_tags(tags:store_tags(id,name,group_name,color)),store_asset_workstations(workstations(id,current_user_name))";
+export async function getStoreById(id: string) { if (!isSupabaseConfigured()) return null; const s = await createClient(); const { data } = await s.from("stores").select("id,name,description,logo_file_id").eq("id", id).is("archived_at", null).maybeSingle(); return data ? {...data,logo:data.logo_file_id?'/api/media/'+data.logo_file_id:null} : null; }
+const storeAssetSelect = "id,created_by,store_id,parent_product_id,asset_category,created_at,updated_at,store:stores!store_assets_store_id_fkey(id,name,archived_at),parent:parent_products!store_assets_parent_store_fk(id,name,parent_product_tags(product_tags(id,name))),asset_files!asset_files_store_asset_id_fkey(id),store_asset_tags(tags:store_tags(id,name,group_name,color)),store_asset_workstations(workstations(id,current_user_name))";
 const sharedAssetSelect = "id,created_by,description,created_at,updated_at,preview_file:asset_files!shared_assets_preview_file_fk(id),shared_asset_stores(store_id,stores(id,name,archived_at)),shared_asset_workstations(workstations(id,current_user_name))";
 function normalizeStore(value: any, id?: string): StoreOption | null {
   const store = relationOne<any>(value);
@@ -28,7 +28,9 @@ function normalizeWorkstations(joins: any) {
 }
 function storeAssetDetail(item: any): AssetDetail {
   const file = relationMany<any>(item.asset_files)[0];
-  return { id: item.id, createdBy: item.created_by, kind: "store", assetCategory: item.asset_category, createdAt: item.created_at ?? "", updatedAt: item.updated_at ?? null, store: normalizeStore(item.store, item.store_id), image: file?.id ? '/api/media/' + file.id : null, tags: relationMany<any>(item.store_asset_tags).map(join => relationOne<any>(join.tags)).filter(Boolean), workstations: normalizeWorkstations(item.store_asset_workstations) };
+  const parent=relationOne<any>(item.parent);
+  const parentProduct=parent?{id:String(parent.id),name:typeof parent.name==="string"?parent.name:"未命名父体",tags:relationMany<any>(parent.parent_product_tags).map(join=>relationOne<any>(join.product_tags)).filter(Boolean)}:null;
+  return { id: item.id, createdBy: item.created_by, kind: "store", parentProductId:item.parent_product_id??parentProduct?.id??null, parentProduct, assetCategory: item.asset_category, createdAt: item.created_at ?? "", updatedAt: item.updated_at ?? null, store: normalizeStore(item.store, item.store_id), image: file?.id ? '/api/media/' + file.id : null, tags: relationMany<any>(item.store_asset_tags).map(join => relationOne<any>(join.tags)).filter(Boolean), workstations: normalizeWorkstations(item.store_asset_workstations) };
 }
 function sharedAssetDetail(item: any): AssetDetail {
   const file = relationOne<any>(item.preview_file);
@@ -58,6 +60,14 @@ export async function getActiveStoreOptions(): Promise<StoreOption[]> {
   const { data, error } = await s.from("stores").select("id,name").is("archived_at", null).order("name");
   if (error) throw new Error(error.message);
   return relationMany<any>(data).map(item => ({ id: item.id, name: item.name }));
+}
+export async function getProductTags():Promise<ProductTag[]>{if(!isSupabaseConfigured())return[];const s=await createClient();const {data,error}=await s.from("product_tags").select("id,name").order("name");if(error)throw new Error("产品标签读取失败，请稍后重试。");return data??[];}
+export async function getParentProducts(storeId:string,assets?:AssetDetail[]):Promise<ParentProduct[]>{
+ if(!isSupabaseConfigured())return[];const s=await createClient();const storeAssets=assets??await getStoreAssets(storeId);const ownAssets=storeAssets.filter(a=>a.kind==="store");
+ const {data,error}=await s.from("parent_products").select("id,store_id,name,created_by,manual_cover_asset_id,parent_product_tags(product_tags(id,name))").eq("store_id",storeId).order("created_at",{ascending:false});
+ if(error)throw new Error("父体读取失败，请稍后重试。");
+ const summary=await s.rpc("v4_parent_summaries",{p_store_id:storeId});if(summary.error)throw new Error("父体读取失败，请稍后重试。");const summaries=new Map((summary.data??[]).map((x:any)=>[x.id,x]));
+ return relationMany<any>(data).map(row=>{const stats:any=summaries.get(row.id);const children=ownAssets.filter(a=>a.parentProductId===row.id);const manual=children.find(a=>a.id===row.manual_cover_asset_id&&a.image);return{id:row.id,storeId:row.store_id,name:row.name,createdBy:row.created_by,manualCoverAssetId:manual?.id??null,tags:relationMany<any>(row.parent_product_tags).map(x=>relationOne<any>(x.product_tags)).filter(Boolean),assetCount:Number(stats?.asset_count??0),cover:stats?.cover_file_id?"/api/media/"+stats.cover_file_id:null,assets:children};});
 }
 export async function canEditWorkstations(): Promise<boolean> {
   if (!isSupabaseConfigured()) return false;
@@ -124,11 +134,11 @@ export async function getSharedAssetCount() { if(!isSupabaseConfigured()) return
 export async function getHomeStores(): Promise<Store[]> {
   if (!isSupabaseConfigured()) return [];
   const s = await createClient();
-  const { data, error } = await s.from("stores").select("id,name,description,updated_at," + storeCountSelect + ",asset_summary:store_assets(asset_category,updated_at)").is("archived_at", null).order("updated_at", { ascending: false }).order("updated_at", { referencedTable: "asset_summary", ascending: false });
+  const { data, error } = await s.from("stores").select("id,name,description,updated_at,logo_file_id," + storeCountSelect + ",asset_summary:store_assets(asset_category,updated_at)").is("archived_at", null).order("updated_at", { ascending: false }).order("updated_at", { referencedTable: "asset_summary", ascending: false });
   if (error) throw new Error(error.message);
   return relationMany<any>(data).map(item => {
     const assets = relationMany<any>(item.asset_summary);
-    return { id: item.id, name: item.name || "未命名店铺", count: storeAssetCount(item), recent: item.description || "", cover: null, updatedAt: assets.reduce((latest, asset) => asset.updated_at > latest ? asset.updated_at : latest, item.updated_at || ""), categories: [...new Set(assets.map(asset => asset.asset_category).filter(value => ["main", "scene", "a_plus", "other"].includes(value)))] as string[] };
+    return { id: item.id, name: item.name || "未命名店铺", count: storeAssetCount(item), recent: item.description || "", cover: null, logo:item.logo_file_id?'/api/media/'+item.logo_file_id:null, updatedAt: assets.reduce((latest, asset) => asset.updated_at > latest ? asset.updated_at : latest, item.updated_at || ""), categories: [...new Set(assets.map(asset => asset.asset_category).filter(value => ["main", "scene", "a_plus", "other"].includes(value)))] as string[] };
   });
 }
 export async function getRecentActivities(): Promise<Activity[]> {
@@ -179,26 +189,23 @@ export async function searchAssets(input: string): Promise<SearchResults> {
   // Quote PostgREST values and escape LIKE wildcards: user input stays literal.
   const pattern = "%" + query.replace(/[\\%_*]/g, value => "\\" + value) + "%";
   const match = (fields: string[]) => fields.map(field => field + ".ilike." + JSON.stringify(pattern)).join(",");
-  const [inspirations, shared, assets, stores, tags, storeTags, promptTags] = await Promise.all([
+  const [inspirations, shared, assets, stores, tags, promptTags] = await Promise.all([
     s.from("inspirations").select(inspirationSelect).or(match(["title", "note", "source_url", "source_domain"])).order("created_at", { ascending: false }).limit(6),
     s.from("shared_assets").select(sharedAssetSelect).or(match(["title", "description"])).order("updated_at", { ascending: false }).limit(6),
     readStoreQuery(select => s.from("store_assets").select(select).or(match(["title", "description"])).order("updated_at", { ascending: false }).limit(6)),
     s.from("stores").select("id,name").is("archived_at", null).or(match(["name", "description"])).order("name").limit(6),
     s.from("tags").select("id,name,group_name,color").ilike("name", pattern).order("name").limit(6),
-    s.from("store_tags").select("id,name,group_name,color").ilike("name",pattern).order("name").limit(6),
     s.from("prompt_tags").select("id,name,group_name,color").ilike("name",pattern).order("name").limit(6),
   ]);
   for (const result of [inspirations, shared, assets, stores, tags]) if (result.error) {
     console.error("[searchAssets] Search failed", result.error);
     throw new Error("搜索暂时不可用，请稍后重试");
   }
-  for(const result of [storeTags,promptTags]) if(result.error && !["PGRST205","42P01"].includes(result.error.code)) { console.error("[searchAssets] Tag search failed",result.error); throw new Error("搜索暂时不可用，请稍后重试"); }
+  if(promptTags.error && !["PGRST205","42P01"].includes(promptTags.error.code)) { console.error("[searchAssets] Tag search failed",promptTags.error); throw new Error("搜索暂时不可用，请稍后重试"); }
   const {searchHandbookModules}=await import("./handbook-data");
   const modules=await searchHandbookModules(query);
-  return { ...modules,storeTags:relationMany<any>(storeTags.data),promptTags:relationMany<any>(promptTags.data), inspirations: relationMany<any>(inspirations.data).map(inspirationDetail), shared: relationMany<any>(shared.data).map(sharedAssetDetail), assets: relationMany<any>(assets.data).map(storeAssetDetail), stores: relationMany<any>(stores.data).map(item => ({ id: item.id, name: item.name })), tags: relationMany<any>(tags.data) };
+  return { ...modules,storeTags:[],promptTags:relationMany<any>(promptTags.data), inspirations: relationMany<any>(inspirations.data).map(inspirationDetail), shared: relationMany<any>(shared.data).map(sharedAssetDetail), assets: relationMany<any>(assets.data).map(storeAssetDetail), stores: relationMany<any>(stores.data).map(item => ({ id: item.id, name: item.name })), tags: relationMany<any>(tags.data) };
 }
-
-export async function getStoreIdsForTag(tag:string):Promise<string[]>{if(!isSupabaseConfigured())return [];const s=await createClient();const {data,error}=await s.from("store_assets").select("store_id,store_asset_tags!inner(tag_id)").eq("store_asset_tags.tag_id",tag);if(error)throw new Error("标签筛选读取失败，请重试。");return [...new Set(relationMany<any>(data).map(r=>String(r.store_id)))];}
 
 // Transitional read compatibility while the reviewed V1 migration awaits deployment.
 // No new mixed-scope tags are created: new tag/move controls remain gated until ready.

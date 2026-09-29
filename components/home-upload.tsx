@@ -51,6 +51,6 @@ export function HomeUploadProvider({ stores, tags, workstations, children, store
     {state.step === "store-picker" && <TargetDialog title="选择店铺" onClose={close}><button type="button" onClick={() => dispatch({ type: "back" })} className="mb-4 text-sm text-zinc-500 hover:text-orange-brand">← 返回保存位置</button><div className="grid gap-3 sm:grid-cols-2">{availableStores.map(store => <button key={store.id} type="button" onClick={() => dispatch({ type: "store", id: store.id })} className="rounded-xl border border-zinc-200 p-4 text-left font-medium transition hover:border-orange-brand hover:bg-orange-brand/5">{store.name}</button>)}</div>{!availableStores.length && <p className="py-8 text-center text-sm text-zinc-500">还没有店铺。<Link href="/stores" onClick={close} className="text-orange-brand">前往管理店铺 →</Link></p>}</TargetDialog>}
     {state.step === "inspiration" && <InspirationModal open initialFile={state.file} initialSourceUrl={state.sourceUrl} tags={tags} onClose={close} />}
     {state.step === "shared" && <SharedAssetModal open initialFile={state.file} stores={availableStores} workstations={workstations} onClose={close} />}
-    {state.step === "store" && state.storeId && <StoreAssetModal key={state.storeId} open initialFile={state.file} storeId={state.storeId} tags={storeTags} workstations={workstations} onClose={close} />}
+    {state.step === "store" && state.storeId && <StoreAssetModal key={state.storeId} open initialFile={state.file} storeId={state.storeId} workstations={workstations} onClose={close} />}
   </HomeUploadContext.Provider>;
 }

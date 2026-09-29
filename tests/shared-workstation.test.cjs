@@ -144,8 +144,11 @@ test('null-safe shared/workstation rendering hides removed fields and preserves 
   const shared = renderToString(React.createElement(SharedAssetDetail, { item, tags: [], stores: [], workstations: [], onClose() {} }));
   assert.ok(!shared.includes('>标签<') && !shared.includes('>类型<'));
   assert.ok(shared.includes('所属店铺') && shared.includes('通用素材') && shared.includes('备注'));
-  const store = renderToString(React.createElement(StoreAssetDetail, { item: { ...item, kind: 'store' }, tags: [], workstations: [], onClose() {} }));
-  assert.ok(store.includes('标签') && store.includes('分类'));
+  const parents=[{id:'p',name:'拱形全身镜',tags:[{id:'t',name:'铝框镜'}]}];
+  const store = renderToString(React.createElement(StoreAssetDetail, { item: { ...item, kind: 'store', parentProductId:'p', store:{name:'Delma'} }, parents, tags: [], workstations: [], onClose() {} }));
+  assert.ok(store.includes('分类')&&store.includes('父体')&&store.includes('拱形全身镜')&&store.includes('标签')&&store.includes('铝框镜')&&store.includes('Delma'));assert.ok(!store.includes('上传时间'));
+  const unclassified=renderToString(React.createElement(StoreAssetDetail,{item:{...item,kind:'store'},parents,tags:[],workstations:[],onClose(){}}));assert.ok(unclassified.includes('未归类')&&unclassified.includes('—'));
+  const untagged=renderToString(React.createElement(StoreAssetDetail,{item:{...item,kind:'store',parentProductId:'empty'},parents:[{id:'empty',name:'无标签父体',tags:[]}],tags:[],workstations:[],onClose(){}}));assert.ok(untagged.includes('无标签父体')&&untagged.includes('—'));
   const cards = renderToString(React.createElement(WorkstationCards, { workstations: [{ id: 2, count: 0, previews: null, current_user_name: null }], canEdit: false }));
   assert.ok(cards.includes('暂无素材') && cards.includes('未分配使用人') && cards.includes('/workstations/2'));
   assert.ok(!cards.includes('<input') && !cards.includes('备注'));
