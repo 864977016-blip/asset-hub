@@ -1,4 +1,4 @@
-const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path'),assert=require('node:assert/strict'),test=require('node:test'),ts=require('typescript');
+const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path'),assert=require('node:assert/strict'),test=require('node:test'),ts=require('typescript'),{PassThrough}=require('node:stream');
 function load(file,overrides={},globals={}){
  const ctx={exports:{},URL,console,...globals,require(name){if(name in overrides)return overrides[name];if(name==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};if(name.startsWith('@/'))return load(name.slice(2)+'.ts',overrides,globals);if(name==='next/link')return 'a';return require(name)}};
  vm.runInNewContext(ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText,ctx);return ctx.exports;
@@ -119,8 +119,37 @@ test('media handlers reject inactive accounts before reading R2 and serve active
  class Response{constructor(body,options){this.body=body;Object.assign(this,options)}}
  for(const file of ['app/api/media/[fileId]/route.ts','app/api/inspirations/[id]/image/route.ts']){
   let active=false,read=0,lookups=0;const query={select(){return query},eq(){return query},maybeSingle:async()=>({data:{storage_key:'key',image_key:'key'}})};
-  const route=load(file,{'next/server':{NextResponse:Response},'@/lib/supabase/server':{createClient:async()=>({auth:{getUser:async()=>({data:{user:{id:'u'}}})},rpc:async()=>({data:active,error:null}),from(){lookups++;return query}})},'@/lib/r2':{readObject:async()=>{read++;return{bytes:new Uint8Array([1]),contentType:'image/webp'}}}});
+  const route=load(file,{'next/server':{NextResponse:Response},'@/lib/supabase/server':{createClient:async()=>({auth:{getUser:async()=>({data:{user:{id:'u'}}})},rpc:async()=>({data:active,error:null}),from(){lookups++;return query}})},'@/lib/r2':{readObject:async()=>{read++;return{bytes:new Uint8Array([1]),contentType:'image/webp'}},readObjectStream:async()=>{read++;return{body:new ReadableStream({start(c){c.enqueue(new Uint8Array([1]));c.close()}}),contentType:'image/webp'}}}});
   const context={params:Promise.resolve({id:'i',fileId:'f'})};assert.equal((await route.GET({},context)).status,403);assert.equal(read,0);assert.equal(lookups,0);
   active=true;const result=await route.GET({},context);assert.equal(read,1);assert.equal(result.headers['Cache-Control'],'private, no-store');
  }
+});
+
+test('media diagnostics are development-only and preserve protected no-store delivery',()=>{
+ const route=fs.readFileSync('app/api/media/[fileId]/route.ts','utf8'),r2=fs.readFileSync('lib/r2.ts','utf8'),image=fs.readFileSync('components/asset-image.tsx','utf8');
+ assert.match(route,/env\.NODE_ENV==="development"/);for(const stage of ['Supabase client initialized','auth.getUser complete','Active-member check complete','asset_files RLS lookup complete','R2 GetObject complete','NextResponse created'])assert.ok(route.includes(stage));assert.match(route,/streamEnd[\s\S]*complete[\s\S]*cancelled/);
+ assert.match(route,/"Cache-Control":"private, no-store"/);assert.match(route,/Server-Timing/);assert.doesNotMatch(route,/console\.info\([^\n]*(storage_key|fileId|user)/);
+ assert.match(r2,/let sharedClient:S3Client\|undefined/);assert.match(r2,/readObjectStream[\s\S]*Readable\.toWeb/);assert.doesNotMatch(route,/transformToByteArray/);
+ for(const metric of ['ttfbMs','downloadMs','decodeMs','totalMs'])assert.ok(image.includes(metric));assert.match(image,/src\.startsWith\("\/api\/media\/"\)/);
+});
+
+test('media route preserves authorization and streams only an authorized existing object',async()=>{
+ class Response{constructor(body,options={}){this.body=body;this.status=options.status??200;this.headers=options.headers??{}}}
+ let user=null,active=false,file=null,mode='ok',reads=0,rpcs=0,lookups=0;
+ const query={select(){return query},eq(){return query},maybeSingle:async()=>({data:file})};
+ const route=load('app/api/media/[fileId]/route.ts',{'next/server':{NextResponse:Response},'@/lib/supabase/server':{createClient:async()=>({auth:{getUser:async()=>({data:{user}})},rpc:async()=>{rpcs++;return{data:active,error:null}},from(){lookups++;return query}})},'@/lib/r2':{readObjectStream:async()=>{reads++;if(mode==='fail')throw Error('private object detail');if(mode==='empty')throw Error('图片不存在');return{body:new ReadableStream({start(c){c.enqueue(new Uint8Array([1,2]));c.close()}}),contentType:'image/webp'}}}});
+ const context={params:Promise.resolve({fileId:'f'})};let result=await route.GET({},context);assert.equal(result.status,401);assert.equal(rpcs+lookups+reads,0);
+ user={id:'u'};result=await route.GET({},context);assert.equal(result.status,403);assert.equal(lookups+reads,0);
+ active=true;result=await route.GET({},context);assert.equal(result.status,404);assert.equal(reads,0);
+ file={storage_key:'private-key',mime_type:'image/webp'};mode='fail';result=await route.GET({},context);assert.equal(result.status,404);assert.equal(result.body,'Not found');assert.ok(!String(result.body).includes('private object'));
+ mode='empty';result=await route.GET({},context);assert.equal(result.status,404);
+ mode='ok';result=await route.GET({},context);assert.equal(result.status,200);assert.equal(result.headers['Content-Type'],'image/webp');assert.equal(result.headers['Cache-Control'],'private, no-store');const reader=result.body.getReader();assert.deepEqual(Array.from((await reader.read()).value),[1,2]);assert.equal((await reader.read()).done,true);
+});
+
+test('R2 client is reused and cancelling the web stream destroys the underlying response',async()=>{
+ let clients=0,source=new PassThrough(),empty=false,fail=false;
+ class S3Client{constructor(){clients++}async send(){if(fail)throw Error('r2 failed');return{Body:empty?undefined:source,ContentType:'image/webp'}}}class Command{constructor(input){this.input=input}}
+ const r2=load('lib/r2.ts',{'server-only':{},'@aws-sdk/client-s3':{S3Client,GetObjectCommand:Command,PutObjectCommand:Command,DeleteObjectCommand:Command},sharp:()=>{}},{process:{env:{R2_BUCKET_NAME:'bucket',R2_ENDPOINT:'https://r2.test',R2_ACCESS_KEY_ID:'id',R2_SECRET_ACCESS_KEY:'secret'}},Buffer});
+ const first=await r2.readObjectStream('key');await first.body.cancel('client disconnected');assert.equal(source.destroyed,true);
+ source=new PassThrough();empty=true;await assert.rejects(r2.readObjectStream('missing'),/图片不存在/);empty=false;fail=true;await assert.rejects(r2.readObjectStream('failed'),/r2 failed/);assert.equal(clients,1);
 });

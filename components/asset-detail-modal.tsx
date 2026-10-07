@@ -4,7 +4,6 @@ import { AssetImage } from "@/components/asset-image";
 import { arrayOrEmpty } from "@/lib/relation-values";
 
 import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
 import { useToast } from "@/components/toast";
 import type { Tag, Workstation } from "@/lib/types";
 
@@ -33,12 +32,11 @@ export function AssetDetailModal({ title, image, children, editor, onSave, onClo
   const [error, setError] = useState("");
   const dialog = useRef<HTMLDialogElement>(null);
   const toast = useToast();
-  const router = useRouter();
   useEffect(() => { const element = dialog.current; const previous = document.activeElement as HTMLElement | null; element?.showModal(); const overflow = document.body.style.overflow; document.body.style.overflow = "hidden"; return () => { element?.close(); document.body.style.overflow = overflow; previous?.focus(); }; }, []);
   const save = (form: FormData) => start(async () => {
     setError("");
-    try { await onSave(form); router.refresh(); toast({ message: success }); onClose(); }
-    catch (reason) { setError(userError(reason)); router.refresh(); }
+    try { await onSave(form); onClose(); toast({ message: success }); }
+    catch (reason) { setError(userError(reason)); }
   });
   return <dialog onDragOver={event => event.preventDefault()} onDrop={event => event.preventDefault()} ref={dialog} data-asset-detail="true" aria-label={title} onCancel={event => { event.preventDefault(); if (!pending) onClose(); }} className="m-auto max-h-[90vh] w-[calc(100%_-_2rem)] max-w-4xl overflow-auto rounded-2xl bg-white p-0 text-ink shadow-float backdrop:bg-black/45 backdrop:backdrop-blur-sm"><div className="grid md:grid-cols-[1.3fr_1fr]"><ImagePreview src={image} alt={title} /><div className="p-6"><div className="flex items-center justify-between gap-4"><h2 className="text-xl font-bold">{title}</h2><button type="button" aria-label="关闭详情" disabled={pending} onClick={onClose} className="round-button">×</button></div>{editing ? <form onSubmit={event=>{event.preventDefault();save(new FormData(event.currentTarget));}} className="mt-6 space-y-5"><fieldset disabled={pending} className="space-y-5">{editor}</fieldset>{error && <p role="alert" className="text-sm text-red-600">{error}</p>}<div className="flex justify-end gap-3"><button type="button" disabled={pending} onClick={() => { setError(""); setEditing(false); }} className="round-button">取消</button><button disabled={pending} className="round-button border-orange-brand bg-orange-brand text-white disabled:opacity-60">{pending ? "保存中…" : "保存"}</button></div></form> : <div className="mt-6 space-y-6">{children}<div className="flex items-center justify-between">{canEdit && <button onClick={() => setEditing(true)} className="round-button">编辑详情</button>}{actions}</div></div>}</div></div></dialog>;
 }

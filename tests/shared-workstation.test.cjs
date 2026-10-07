@@ -83,6 +83,7 @@ function database() {
   const actions = loader({
     '@/lib/supabase/server': { createClient: async () => client },
     'next/cache': { revalidatePath: p => paths.push(p) },
+    'next/server': { after: task => task() },
     '@/lib/r2': { optimizeAndUploadImage: async () => { media.push('upload'); return { key: 'image', originalName: 'image.png', mimeType: 'image/png', sizeBytes: 3, width: 1, height: 1 }; }, removeObject: async () => media.push('remove') },
   })('app/actions.ts');
   return { tables, calls, paths, media, actions };
@@ -122,6 +123,14 @@ test('shared upload associates multiple active stores/locations without writing 
   assert.equal(d.tables.shared_asset_stores.filter(row => row.shared_asset_id === created.id).length, 2);
   assert.equal(d.tables.shared_asset_workstations.filter(row => row.shared_asset_id === created.id).length, 2);
   assert.equal(d.tables.shared_asset_tags.length, 1);
+});
+
+test('shared upload timing is development-only and covers server plus perceived UI stages',()=>{
+ const actions=fs.readFileSync('app/actions.ts','utf8'),r2=fs.readFileSync('lib/r2.ts','utf8'),ui=fs.readFileSync('components/image-upload-forms.tsx','utf8'),wall=fs.readFileSync('components/asset-browser.tsx','utf8');
+ assert.match(actions,/env\.NODE_ENV==="development"/);for(let stage=1;stage<=11;stage++)assert.ok(actions.includes(`${stage}. `));
+ for(const stage of ['file-read','sharp','r2'])assert.ok(r2.includes(`mark?.("${stage}")`));
+ for(const stage of ['A. Upload clicked','B. Server Action returned','C. Modal closed','D. New asset rendered'])assert.ok(ui.includes(stage));
+ assert.match(ui,/form\.set\("_upload_perf_id",timer\.requestId\)/);assert.match(wall,/data-asset-id=\{item\.id\}[\s\S]*data-asset-kind=\{item\.kind\|\|kind\}/);
 });
 
 test('workstation rename is admin-only and updates no notes or asset relations', async () => {

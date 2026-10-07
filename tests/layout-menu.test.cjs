@@ -40,8 +40,8 @@ test('shared CSS ties sidebar offset to visibility and grids to actual content w
   assert.equal(value('.app-sidebar','display',viewport,content),viewport>=1024?'flex':'none');assert.equal(value('.app-shell','padding-left',viewport,content),viewport>=1024?'18rem':'0');
   const base=value('.content-grid','grid-template-columns',viewport,content),override=value('.grid-four','grid-template-columns',viewport,content);assert.equal(override||base,columns===1?'minmax(0, 1fr)':`repeat(${columns}, minmax(0, 1fr))`);
  }
- assert.equal(value('.handbook-layout','grid-template-columns',1024,672),undefined);
- assert.equal(value('.handbook-layout','grid-template-columns',1440,1088),'240px minmax(0, 1fr)');
+ assert.equal(value('.handbook-layout','grid-template-columns',1024,672),'minmax(11.25rem, 13.75rem) minmax(0, 1fr)');
+ assert.equal(value('.handbook-layout','grid-template-columns',1440,1088),'minmax(11.25rem, 13.75rem) minmax(0, 1fr)');
  assert.equal(value('.app-main','container',800,736),'workspace / inline-size');
 });
 
@@ -51,7 +51,7 @@ test('both inspiration walls share automatic columns calculated from Main conten
   assert.equal(rule.parent.type,'root','Masonry must not acquire breakpoint overrides');
   rule.walkDecls(d=>declarations[d.prop]=d.value);
  });
- assert.equal(declarations['column-count'],'auto');assert.equal(declarations.width,'100%');assert.equal(declarations['min-width'],'0');
+ assert.equal(declarations['column-count'],'auto');assert.equal(declarations.width,'100%');assert.equal(declarations['min-width'],'0');assert.equal(declarations.display,'block');assert.equal(declarations['max-width'],'none');assert.equal(declarations['align-self'],'stretch');
  const rem=value=>{assert.match(value,/^[\d.]+rem$/);return parseFloat(value)*16};
  const ideal=rem(declarations['column-width']),gap=rem(declarations['column-gap']);
  // CSS multicol's used count and width for column-count:auto, not viewport classes.
@@ -64,9 +64,15 @@ test('both inspiration walls share automatic columns calculated from Main conten
  assert.equal(layout(1000-64).count,3);assert.equal(layout(1000-64-288).count,2);
  assert.equal(layout(3*ideal+2*gap-1).count,2);assert.equal(layout(3*ideal+2*gap).count,3);
  for(const file of ['components/home-content.tsx','components/inspiration-browser.tsx']){
-  const source=fs.readFileSync(file,'utf8');assert.ok(source.includes('className="inspiration-masonry"'));
+  const source=fs.readFileSync(file,'utf8');assert.ok(source.includes('className="asset-masonry"'));
   assert.ok(!source.includes('home-masonry'));
  }
  assert.ok(!fs.readFileSync('app/globals.css','utf8').includes('.home-masonry'));
- for(const file of ['components/home-content.tsx','components/inspiration-card.tsx'])assert.ok(fs.readFileSync(file,'utf8').includes('className="block h-auto w-full"'),'Images keep their intrinsic aspect ratio');
+ for(const file of ['components/home-content.tsx','components/inspiration-card.tsx'])assert.match(fs.readFileSync(file,'utf8'),/className="[^"]*h-auto[^"]*w-full[^"]*"/,'Images keep their intrinsic aspect ratio');
+});
+
+test('sparse asset walls fill horizontal tracks instead of stacking in one multicol column',()=>{
+ const css=fs.readFileSync('app/globals.css','utf8');
+ assert.match(css,/\.asset-masonry:has\(> \.asset-card:last-child:nth-child\(-n \+ 4\)\)\s*\{[^}]*display: grid;[^}]*grid-template-columns: repeat\(auto-fill, minmax\(min\(14rem, 100%\), 1fr\)\);/s);
+ assert.match(css,/\.asset-masonry:has\(> \.asset-card:last-child:nth-child\(-n \+ 4\)\) > \.asset-card\s*\{ margin-bottom: 0; \}/);
 });

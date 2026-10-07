@@ -22,5 +22,5 @@ export function InspirationBrowser({ inspirations, tags, initialTag = "" }: { in
   const [selectedTags, setSelectedTags] = useState<string[]>(initialTag ? [initialTag] : []);
   const visible = inspirations.filter(item => matchesTags(item, selectedTags));
   const selected = inspirations.find(item => item.id === selectedId);
-  return <><TagFilter tags={tags} selected={selectedTags} onChange={setSelectedTags} />{!visible.length && <p className="py-16 text-center text-zinc-500">没有符合所选标签的灵感</p>}<section className="inspiration-masonry">{visible.map(item => <div key={item.id} className="mb-6 break-inside-avoid [&_button]:cursor-pointer"><InspirationCard item={item} onOpen={() => setSelectedId(item.id)} /></div>)}</section>{selected && <InspirationDetail key={selected.id} item={selected} tags={tags} onClose={() => setSelectedId(null)} />}</>;
+  return <><TagFilter tags={tags} selected={selectedTags} onChange={setSelectedTags} />{!visible.length && <p className="py-16 text-center text-zinc-500">没有符合所选标签的灵感</p>}<section className="asset-masonry">{visible.map(item => <InspirationCard key={item.id} item={item} onOpen={() => setSelectedId(item.id)} />)}</section>{selected && <InspirationDetail key={selected.id} item={selected} tags={tags} onClose={() => setSelectedId(null)} />}</>;
 }

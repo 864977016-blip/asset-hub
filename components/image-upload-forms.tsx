@@ -3,7 +3,6 @@ import { ParentSelector } from "./parent-selector";
 import { userError } from "@/lib/user-error";
 
 import { createContext, useCallback, useContext, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { createSharedAsset, uploadStoreAsset } from "@/app/actions";
 import { ImageDropZone, useClipboardImage, useLocalImage, usePageImageDrop } from "@/components/image-drop-zone";
 import { useToast } from "@/components/toast";
@@ -15,6 +14,13 @@ type UploadContextValue = { openWith: (file?: File) => void; isModalOpen: boolea
 export function useStoreUpload(){return useContext(StoreUploadContext)}
 const StoreUploadContext = createContext<UploadContextValue | null>(null);
 
+function sharedUploadTimer(){
+ if(typeof process==="undefined"||process.env.NODE_ENV!=="development")return null;
+ const requestId=crypto.randomUUID().slice(0,8),started=performance.now();let previous=started;
+ const mark=(stage:string)=>{const now=performance.now();console.info(`[shared-upload:${requestId}] ${stage}`,{stageMs:Math.round(now-previous),totalMs:Math.round(now-started)});previous=now};
+ mark("A. Upload clicked");return{requestId,mark,watch(assetId:string){let closed=false,visible=false;const check=()=>{if(!closed&&!document.querySelector("[data-upload-modal]")){closed=true;mark("C. Modal closed")}if(!visible&&document.querySelector(`[data-asset-kind="shared"][data-asset-id="${assetId}"]`)){visible=true;mark("D. New asset rendered")}if(closed&&visible){observer.disconnect();clearTimeout(timeout)}};const observer=new MutationObserver(check),timeout=window.setTimeout(()=>observer.disconnect(),30000);observer.observe(document.body,{childList:true,subtree:true});requestAnimationFrame(check)}};
+}
+
 function UploadDialog({ children, title, open }: { children: React.ReactNode; title: string; open: boolean }) {
   if (!open) return null;
   return <div data-upload-modal onDragOver={event => event.preventDefault()} onDrop={event => event.preventDefault()} className="fixed inset-0 z-[60] grid place-items-center bg-black/35 p-5 backdrop-blur-sm"><div className="max-h-[90vh] w-full max-w-lg overflow-auto rounded-2xl bg-white p-6 shadow-float"><h2 className="text-xl font-bold">{title}</h2>{children}</div></div>;
@@ -25,13 +31,12 @@ export function StoreAssetModal({ storeId, workstations, open, initialFile, onCl
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState("");
   const toast = useToast();
-  const router = useRouter();
   const close = () => { if (!pending) { setError(""); setFile(null); onClose(); } };
   const submit = (form: FormData) => startTransition(async () => {
     if (!file) { setError("请选择图片"); return; }
     setError("");
     form.set("image", file);
-    try { await uploadStoreAsset(storeId, form); router.refresh(); toast({ message: "素材上传成功" }); setFile(null); onClose(); }
+    try { await uploadStoreAsset(storeId, form); setFile(null); onClose(); toast({ message: "素材上传成功" }); }
     catch (reason) { const message = userError(reason,"上传失败，请重试。"); setError(message); toast({ message, error: true }); }
   });
 
@@ -66,12 +71,11 @@ export function SharedAssetModal({ stores, workstations, open, initialFile, onCl
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState("");
   const toast = useToast();
-  const router = useRouter();
   const close = () => { if (!pending) { setError(""); setFile(null); onClose(); } };
   const submit = (form: FormData) => startTransition(async () => {
     if (!file) { setError("请选择图片"); return; }
-    setError(""); form.set("image", file);
-    try { await createSharedAsset(form); router.refresh(); toast({ message: "共享素材上传成功" }); setFile(null); onClose(); }
+    const timer=sharedUploadTimer();setError("");form.set("image", file);if(timer)form.set("_upload_perf_id",timer.requestId);
+    try { const result=await createSharedAsset(form);timer?.mark("B. Server Action returned");timer?.watch(result.id);setFile(null);onClose();toast({ message: "共享素材上传成功" }); }
     catch (reason) { const message = userError(reason,"上传失败，请重试。"); setError(message); toast({ message, error: true }); }
   });
   return <UploadDialog title="新增共享素材" open={open}><form onSubmit={event=>{event.preventDefault();submit(new FormData(event.currentTarget));}} className="mt-4 space-y-4"><ImageDropZone file={file} previewUrl={previewUrl} onFileChange={setFile} /><StoreSelector stores={stores} selected={initialStores} /><WorkstationSelector workstations={workstations} /><label className="block text-sm font-medium">备注（可选）<textarea name="description" placeholder="添加团队内部备注…" rows={3} className="mt-2 w-full rounded-xl border p-3 text-sm" /></label>{error && <p className="text-sm text-red-600">{error}</p>}<div className="flex justify-end gap-3"><button type="button" onClick={close} disabled={pending} className="round-button">取消</button><button disabled={pending} className="round-button border-orange-brand bg-orange-brand text-white hover:bg-orange-deep disabled:opacity-60">{pending ? "上传中…" : "保存共享素材"}</button></div></form></UploadDialog>;

@@ -2,7 +2,6 @@
 import {ActionMenu} from "./action-menu";
 
 import {useState,useTransition} from "react";
-import {useRouter} from "next/navigation";
 import {deleteAsset,moveAsset} from "@/app/asset-operations";
 import {Modal} from "./modal";
 import {StoreSelector} from "./store-selector";
@@ -12,10 +11,10 @@ import {useToast} from "./toast";
 import {userError} from "@/lib/user-error";
 import type {AssetDetail,StoreOption,Workstation} from "@/lib/types";
 export function AssetCommands({kind,item,stores=[],workstations=[],currentStore,onClose}:{kind:"inspiration"|"store"|"shared";item:AssetDetail;stores?:StoreOption[];workstations?:Workstation[];currentStore?:StoreOption;onClose:()=>void}){
- const {ready,profile}=useTeam();const allowed=useCanManage(item.createdBy);const [step,setStep]=useState<"move"|"delete"|"permanent"|null>(null),[error,setError]=useState("");const [pending,start]=useTransition();const router=useRouter(),toast=useToast();
+ const {ready,profile}=useTeam();const allowed=useCanManage(item.createdBy);const [step,setStep]=useState<"move"|"delete"|"permanent"|null>(null),[error,setError]=useState("");const [pending,start]=useTransition(),toast=useToast();
  const canRemove=Boolean(profile.id&&kind==="shared"&&currentStore&&item.stores?.some(store=>store.id===currentStore.id));
  if((!allowed&&!canRemove)||!ready)return null;
- const execute=(operation:()=>Promise<void>,message:string)=>start(async()=>{setError("");try{await operation();router.refresh();toast({message});setStep(null);onClose()}catch(e){setError(userError(e));}});
+ const execute=(operation:()=>Promise<void>,message:string)=>start(async()=>{setError("");try{await operation();setStep(null);onClose();toast({message})}catch(e){setError(userError(e));}});
  return <div className="relative"><ActionMenu label="素材操作" triggerClassName="round-button">{allowed&&kind!=="inspiration"&&<button type="button" onClick={()=>{setStep("move");setError("")}} className="block w-full px-3 py-2 text-left text-sm">{kind==="store"?"移至共享素材":"移至店铺素材"}</button>}<button type="button" onClick={()=>{setStep("delete");setError("")}} className="block w-full px-3 py-2 text-left text-sm text-red-600">{allowed?"删除":"从当前店铺移除"}</button></ActionMenu>
  {step&&<Modal title={step==="move"?(kind==="store"?"移至共享素材":"移至店铺素材"):kind==="shared"?"处理这项共享素材":"删除素材"} pending={pending} onClose={()=>setStep(null)}>
  {step==="move"?<form onSubmit={event=>{event.preventDefault();const form=new FormData(event.currentTarget);execute(()=>moveAsset(kind as "store"|"shared",item.id,form),"素材已移动");}} className="space-y-5"><fieldset disabled={pending} className="space-y-5">{kind==="store"?<><StoreSelector stores={stores} selected={item.store?[item.store]:[]}/><label className="block text-sm">备注（可选）<textarea name="description" className="mt-2 w-full rounded border p-3"/></label></>:<><label className="block text-sm">目标店铺<select name="store_ids" required className="mt-2 w-full rounded border p-3"><option value="">请选择店铺</option>{stores.filter(s=>!s.archivedAt).map(s=><option value={s.id} key={s.id}>{s.name}</option>)}</select></label><label className="block text-sm">分类<select name="category" className="mt-2 w-full rounded border p-3">{assetCategories.map(([v,l])=><option value={v} key={v}>{l}</option>)}</select></label></>}<WorkstationSelector workstations={workstations} selected={item.workstations}/></fieldset>{error&&<p role="alert" className="text-sm text-red-600">{error}</p>}<div className="flex justify-end gap-3"><button type="button" disabled={pending} onClick={()=>setStep(null)} className="round-button">取消</button><button disabled={pending} className="round-button">{pending?"移动中…":"移动"}</button></div></form>:<>

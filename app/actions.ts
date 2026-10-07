@@ -1,9 +1,13 @@
 "use server";
 import { relationOne } from "@/lib/relation-values";
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { optimizeAndUploadImage, removeObject } from "@/lib/r2";
 import { session, fail, drainCleanup } from "@/lib/action-utils";
+import { randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
+import { env } from "node:process";
 async function admin() { return (await session(true)).s; }
 const slug=(v:string)=>`${v.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g,"-").replace(/^-|-$/g,"")}-${Date.now().toString(36)}`;
 const refreshStoreViews = () => { revalidatePath("/", "layout"); revalidatePath("/stores"); };
@@ -24,7 +28,7 @@ export async function setStoreLogo(id:string,form:FormData){
 }
 export async function removeStoreLogo(id:string){const s=await admin();const {error}=await s.rpc("v4_set_store_logo",{p_store_id:id,p_file:null});if(error)fail(error);refreshStoreViews();await drainCleanup();}
 export async function readParentOptions(storeId:string){const {s}=await session();const {data,error}=await s.from("parent_products").select("id,name").eq("store_id",storeId).order("name");if(error)fail(error);return data??[];}
-function refreshWorkstationViews() { revalidatePath("/workstations"); for (let id = 1; id <= 8; id++) revalidatePath(`/workstations/${id}`); }
+function refreshWorkstationViews(ids?: number[]) { revalidatePath("/workstations"); for (const id of ids ?? [1,2,3,4,5,6,7,8]) revalidatePath(`/workstations/${id}`); }
 export async function updateWorkstation(id:number,form:FormData) {
   if (!Number.isInteger(id) || id < 1 || id > 8) throw new Error("工作站编号无效");
   const s = await admin();
@@ -46,7 +50,27 @@ async function recordActivity(s: Awaited<ReturnType<typeof createClient>>, actor
     console.error("[recordActivity] Activity write failed; asset operation remains successful", { actorId, targetType, targetId, action, error });
   }
 }
-export async function uploadStoreAsset(storeId:string, form:FormData) { const {s,user}=await userClient(); const {data:store,error:storeError}=await s.from("stores").select("id").eq("id",storeId).is("archived_at",null).single(); if(storeError||!store) throw new Error("店铺不存在或已归档"); const parentProductId=String(form.get("parent_product_id")||"")||null;if(parentProductId){const parent=await s.from("parent_products").select("id").eq("id",parentProductId).eq("store_id",storeId).maybeSingle();if(parent.error||!parent.data)throw new Error("所选父体不属于当前店铺");} const {tagIds,workstationIds}=await relationSelection(s,form); const category=String(form.get("category")||"other"); if(!["main","scene","a_plus","other"].includes(category)) throw new Error("请选择有效分类"); const file=form.get("image"); if(!(file instanceof File)) throw new Error("请选择图片"); const fallbackTitle=file.name.replace(/\.[^.]+$/, "") || "未命名素材"; const {data:asset,error}=await s.from("store_assets").insert({store_id:storeId,parent_product_id:parentProductId,title:fallbackTitle,description:String(form.get("description")||""),asset_category:category,created_by:user.id}).select("id").single(); if(error||!asset) throw new Error(error?.message||"无法创建素材"); let uploadedKey: string | null = null; try { const image=await optimizeAndUploadImage(file,`stores/${storeId}/assets`); uploadedKey=image.key; const {error:fileError}=await s.from("asset_files").insert({store_asset_id:asset.id,original_name:image.originalName,storage_key:image.key,mime_type:image.mimeType,size_bytes:image.sizeBytes,width:image.width,height:image.height,kind:"image",created_by:user.id}); if(fileError) { await removeObject(image.key); throw new Error(fileError.message); } await replaceRelations(s,"store_asset_workstations","store_asset_id",asset.id,"workstation_id",workstationIds); await replaceRelations(s,"store_asset_tags","store_asset_id",asset.id,"tag_id",tagIds); await recordActivity(s,user.id,"store_asset",asset.id,"store_asset_created"); revalidatePath(`/stores/${storeId}`); revalidatePath("/stores"); refreshWorkstationViews(); revalidatePath("/"); } catch(e) { const {error:cleanupError}=await s.from("store_assets").delete().eq("id",asset.id); if(!cleanupError && uploadedKey) await removeObject(uploadedKey).catch(()=>{}); throw e; } }
+function recordActivityAfter(s:Awaited<ReturnType<typeof createClient>>,actorId:string,targetType:string,targetId:string,action:string){
+ try{after(()=>recordActivity(s,actorId,targetType,targetId,action))}catch(error){console.error("[recordActivity] Could not schedule audit write; asset operation remains successful",{actorId,targetType,targetId,action,error})}
+}
+export async function uploadStoreAsset(storeId:string, form:FormData) {
+ const {s,user}=await userClient(),parentProductId=String(form.get("parent_product_id")||"")||null,category=String(form.get("category")||"other"),file=form.get("image");
+ if(!["main","scene","a_plus","other"].includes(category))throw new Error("请选择有效分类");if(!(file instanceof File))throw new Error("请选择图片");
+ const [store,parent,relations]=await Promise.all([
+  s.from("stores").select("id").eq("id",storeId).is("archived_at",null).single(),
+  parentProductId?s.from("parent_products").select("id").eq("id",parentProductId).eq("store_id",storeId).maybeSingle():Promise.resolve({data:null,error:null}),
+  relationSelection(s,form)
+ ]);
+ if(store.error||!store.data)throw new Error("店铺不存在或已归档");if(parentProductId&&(parent.error||!parent.data))throw new Error("所选父体不属于当前店铺");
+ const fallbackTitle=file.name.replace(/\.[^.]+$/, "")||"未命名素材",{tagIds,workstationIds}=relations;
+ const {data:asset,error}=await s.from("store_assets").insert({store_id:storeId,parent_product_id:parentProductId,title:fallbackTitle,description:String(form.get("description")||""),asset_category:category,created_by:user.id}).select("id").single();if(error||!asset)throw new Error(error?.message||"无法创建素材");
+ let uploadedKey:string|null=null;try{
+  const image=await optimizeAndUploadImage(file,`stores/${storeId}/assets`);uploadedKey=image.key;
+  const {error:fileError}=await s.from("asset_files").insert({store_asset_id:asset.id,original_name:image.originalName,storage_key:image.key,mime_type:image.mimeType,size_bytes:image.sizeBytes,width:image.width,height:image.height,kind:"image",created_by:user.id});if(fileError){await removeObject(image.key);throw new Error(fileError.message)}
+  await Promise.all([insertRelations(s,"store_asset_workstations","store_asset_id",asset.id,"workstation_id",workstationIds),insertRelations(s,"store_asset_tags","store_asset_id",asset.id,"tag_id",tagIds)]);
+  recordActivityAfter(s,user.id,"store_asset",asset.id,"store_asset_created");revalidatePath(`/stores/${storeId}`);revalidatePath("/stores");refreshWorkstationViews(workstationIds);revalidatePath("/");
+ }catch(e){const {error:cleanupError}=await s.from("store_assets").delete().eq("id",asset.id);if(!cleanupError&&uploadedKey)await removeObject(uploadedKey).catch(()=>{});throw e}
+}
 export async function createInspiration(form: FormData) {
   const { s, user } = await userClient();
   const file = form.get("image");
@@ -61,8 +85,8 @@ export async function createInspiration(form: FormData) {
     inspirationId = data.id;
     const { error: imageError } = await s.from("inspirations").update({ image_url: '/api/inspirations/' + data.id + '/image' }).eq("id", data.id);
     if (imageError) throw new Error(imageError.message);
-    await replaceRelations(s, "inspiration_tags", "inspiration_id", data.id, "tag_id", tagIds);
-    await recordActivity(s, user.id, "inspiration", data.id, "inspiration_created");
+    await insertRelations(s, "inspiration_tags", "inspiration_id", data.id, "tag_id", tagIds);
+    recordActivityAfter(s, user.id, "inspiration", data.id, "inspiration_created");
   } catch (reason) {
     const cleanup = inspirationId ? await s.from("inspirations").delete().eq("id", inspirationId) : { error: null };
     if (!cleanup.error) await removeObject(image.key).catch(() => {});
@@ -75,19 +99,16 @@ async function relationSelection(s: Awaited<ReturnType<typeof createClient>>, fo
   const tagIds = withTags ? [...new Set(form.getAll("tag_ids").map(String).filter(Boolean))] : [];
   const workstationIds = withWorkstations ? [...new Set(form.getAll("workstation_ids").map(Number))] : [];
   if (workstationIds.some(id => !Number.isInteger(id) || id <= 0)) throw new Error("工作站选择无效");
-  if (tagIds.length) {
-    let result = await s.from(tagScope === "store" ? "store_tags" : "tags").select("id").in("id", tagIds);
-    if(tagScope === "store" && ["PGRST205","42P01"].includes(result.error?.code || "")) result = await s.from("tags").select("id").in("id",tagIds);
-    const {data,error}=result;
-    if (error) throw new Error(error.message);
-    if (data?.length !== tagIds.length) throw new Error("部分标签已失效，请刷新后重试");
-  }
-  if (workstationIds.length) {
-    const { data, error } = await s.from("workstations").select("id").in("id", workstationIds);
-    if (error) throw new Error(error.message);
-    if (data?.length !== workstationIds.length) throw new Error("部分工作站已失效，请刷新后重试");
-  }
+  const [tags,workstations]=await Promise.all([
+    tagIds.length?(async()=>{let result=await s.from(tagScope==="store"?"store_tags":"tags").select("id").in("id",tagIds);if(tagScope==="store"&&["PGRST205","42P01"].includes(result.error?.code||""))result=await s.from("tags").select("id").in("id",tagIds);return result})():Promise.resolve({data:[],error:null}),
+    workstationIds.length?s.from("workstations").select("id").in("id",workstationIds):Promise.resolve({data:[],error:null})
+  ]);
+  if(tags.error)throw new Error(tags.error.message);if(tags.data?.length!==tagIds.length)throw new Error("部分标签已失效，请刷新后重试");
+  if(workstations.error)throw new Error(workstations.error.message);if(workstations.data?.length!==workstationIds.length)throw new Error("部分工作站已失效，请刷新后重试");
   return { tagIds, workstationIds };
+}
+async function insertRelations(s:Awaited<ReturnType<typeof createClient>>,table:string,parentKey:string,id:string,targetKey:string,ids:(string|number)[]){
+ if(!ids.length)return;const {data,error}=await s.from(table).insert(ids.map(value=>({[parentKey]:id,[targetKey]:value}))).select(targetKey);if(error)throw new Error(error.message);if(data?.length!==ids.length)throw new Error("关联保存失败，请刷新后重试");
 }
 // Replace the selected set by adding missing rows before removing deselected rows.
 // Existing rows are preserved, and an insertion failure never clears old selections.
@@ -178,4 +199,22 @@ export async function setParentCover(id:string,assetId:string|null){const {s}=aw
 export async function createProductTag(name:string){const {s}=await session();const {data,error}=await s.rpc("v4_create_product_tag",{p_name:name});if(error)fail(error);refreshStoreViews();return data;}
 export async function manageProductTag(id:string,name?:string,remove=false){const {s}=await session(true);const {error}=await s.rpc("v4_manage_product_tag",{p_id:id,p_name:name??null,p_delete:remove});if(error)fail(error);refreshStoreViews();}
 export async function batchStoreAssets(storeId:string,assetIds:string[],operation:string,value?:string,tagIds:string[]=[]){const {s}=await session();const args={p_store_id:storeId,p_asset_ids:assetIds,p_operation:operation,p_parent_id:operation==="set_parent"?value:null,p_category:operation==="category"?value:null,p_tag_ids:tagIds};const {data,error}=await s.rpc("v4_batch_store_assets",args);if(error){console.error("[batch assets]",error);throw new Error(error.code==="42501"?"你目前没有权限执行此操作。":error.code&&/^(22|23|42|P000)/.test(error.code)?"批量操作失败，未对素材进行部分修改。":"批量操作结果暂时无法确认，请刷新后检查。");}refreshStoreViews();if(operation==="delete")await drainCleanup();return Number(data||0);}
-export async function createSharedAsset(form:FormData) { const {s,user}=await userClient(); const storeIds=await sharedStoreSelection(s,form); const {workstationIds}=await relationSelection(s,form,true,false); const file=form.get("image"); if(!(file instanceof File)) throw new Error("请选择图片"); const fallbackTitle=file.name.replace(/\.[^.]+$/, "") || "未命名共享素材"; const {data:asset,error}=await s.from("shared_assets").insert({title:fallbackTitle,description:String(form.get("description")||""),asset_type:"other",created_by:user.id}).select("id").single(); if(error||!asset) throw new Error(error?.message||"无法创建共享素材"); let uploadedKey: string | null = null; try { const image=await optimizeAndUploadImage(file,"shared"); uploadedKey=image.key; const {data:fileRow,error:fileError}=await s.from("asset_files").insert({shared_asset_id:asset.id,original_name:image.originalName,storage_key:image.key,mime_type:image.mimeType,size_bytes:image.sizeBytes,width:image.width,height:image.height,kind:"image",created_by:user.id}).select("id").single(); if(fileError||!fileRow) { await removeObject(image.key); throw new Error(fileError?.message||"无法保存图片"); } const {error:previewError}=await s.from("shared_assets").update({preview_file_id:fileRow.id}).eq("id",asset.id); if(previewError) throw new Error(previewError.message); await replaceRelations(s,"shared_asset_stores","shared_asset_id",asset.id,"store_id",storeIds); await replaceRelations(s,"shared_asset_workstations","shared_asset_id",asset.id,"workstation_id",workstationIds); await recordActivity(s,user.id,"shared_asset",asset.id,"shared_asset_created"); revalidatePath("/shared"); revalidatePath("/stores"); revalidatePath("/stores/[id]", "page"); refreshWorkstationViews(); revalidatePath("/"); } catch(e) { const {error:cleanupError}=await s.from("shared_assets").delete().eq("id",asset.id); if(!cleanupError && uploadedKey) await removeObject(uploadedKey).catch(()=>{}); throw e; } }
+export async function createSharedAsset(form:FormData) {
+ const measuring=env.NODE_ENV==="development",requestedId=String(form.get("_upload_perf_id")||""),requestId=measuring?(/^[a-f\d-]{8,36}$/i.test(requestedId)?requestedId:randomUUID().slice(0,8)):"",started=measuring?performance.now():0;let previous=started;
+ const mark=(stage:string)=>{if(!measuring)return;const now=performance.now();console.info(`[shared-upload:${requestId}] ${stage}`,{stageMs:Math.round(now-previous),totalMs:Math.round(now-started)});previous=now};
+ mark("1. Server Action entered");
+ const {s,user}=await userClient(),file=form.get("image");mark("2. Authentication complete");if(!(file instanceof File))throw new Error("请选择图片");
+ const [storeIds,{workstationIds}]=await Promise.all([sharedStoreSelection(s,form),relationSelection(s,form,true,false)]),fallbackTitle=file.name.replace(/\.[^.]+$/, "")||"未命名共享素材";mark("3. Associations validated");
+ const {data:asset,error}=await s.from("shared_assets").insert({title:fallbackTitle,description:String(form.get("description")||""),asset_type:"other",created_by:user.id}).select("id").single();if(error||!asset)throw new Error(error?.message||"无法创建共享素材");
+ mark("4. Asset row created");
+ let uploadedKey:string|null=null;try{
+  const image=await optimizeAndUploadImage(file,"shared",stage=>mark(stage==="file-read"?"5. File read complete":stage==="sharp"?"6. Sharp complete":"7. R2 upload complete"));uploadedKey=image.key;
+  const {data:fileRow,error:fileError}=await s.from("asset_files").insert({shared_asset_id:asset.id,original_name:image.originalName,storage_key:image.key,mime_type:image.mimeType,size_bytes:image.sizeBytes,width:image.width,height:image.height,kind:"image",created_by:user.id}).select("id").single();if(fileError||!fileRow){await removeObject(image.key);throw new Error(fileError?.message||"无法保存图片")}
+  mark("8. asset_files row created");
+  const {error:previewError}=await s.from("shared_assets").update({preview_file_id:fileRow.id}).eq("id",asset.id);if(previewError)throw new Error(previewError.message);
+  await Promise.all([insertRelations(s,"shared_asset_stores","shared_asset_id",asset.id,"store_id",storeIds),insertRelations(s,"shared_asset_workstations","shared_asset_id",asset.id,"workstation_id",workstationIds)]);
+  mark("9. Asset associations created");
+  recordActivityAfter(s,user.id,"shared_asset",asset.id,"shared_asset_created");revalidatePath("/shared");revalidatePath("/stores");for(const id of storeIds)revalidatePath(`/stores/${id}`);refreshWorkstationViews(workstationIds);revalidatePath("/");mark("10. Revalidation scheduled");
+  mark("11. Before Server Action return");return {id:asset.id,requestId};
+ }catch(e){const {error:cleanupError}=await s.from("shared_assets").delete().eq("id",asset.id);if(!cleanupError&&uploadedKey)await removeObject(uploadedKey).catch(()=>{});throw e}
+}
