@@ -63,11 +63,8 @@ test('both inspiration walls share automatic columns calculated from Main conten
  // A sidebar change affects available width; the wall itself has no sidebar/viewport rule.
  assert.equal(layout(1000-64).count,3);assert.equal(layout(1000-64-288).count,2);
  assert.equal(layout(3*ideal+2*gap-1).count,2);assert.equal(layout(3*ideal+2*gap).count,3);
- for(const file of ['components/home-content.tsx','components/inspiration-browser.tsx']){
-  const source=fs.readFileSync(file,'utf8');assert.ok(source.includes('className="asset-masonry"'));
-  assert.ok(!source.includes('home-masonry'));
- }
- assert.ok(!fs.readFileSync('app/globals.css','utf8').includes('.home-masonry'));
+ assert.match(fs.readFileSync('components/home-content.tsx','utf8'),/className="asset-masonry home-inspiration-grid"/);
+ assert.match(fs.readFileSync('components/inspiration-browser.tsx','utf8'),/className="asset-masonry"/);
  for(const file of ['components/home-content.tsx','components/inspiration-card.tsx'])assert.match(fs.readFileSync(file,'utf8'),/className="[^"]*h-auto[^"]*w-full[^"]*"/,'Images keep their intrinsic aspect ratio');
 });
 
@@ -75,4 +72,16 @@ test('sparse asset walls fill horizontal tracks instead of stacking in one multi
  const css=fs.readFileSync('app/globals.css','utf8');
  assert.match(css,/\.asset-masonry:has\(> \.asset-card:last-child:nth-child\(-n \+ 4\)\)\s*\{[^}]*display: grid;[^}]*grid-template-columns: repeat\(auto-fill, minmax\(min\(14rem, 100%\), 1fr\)\);/s);
  assert.match(css,/\.asset-masonry:has\(> \.asset-card:last-child:nth-child\(-n \+ 4\)\) > \.asset-card\s*\{ margin-bottom: 0; \}/);
+});
+test('home recent inspiration fills content-width tracks for one to ten cards without changing other walls',()=>{
+ const css=fs.readFileSync('app/globals.css','utf8');
+ assert.match(css,/\.home-inspiration-grid\s*\{[^}]*display: grid;[^}]*grid-template-columns: repeat\(auto-fill, minmax\(min\(14rem, 100%\), 1fr\)\);[^}]*gap: 1\.5rem;[^}]*align-items: start;/s);
+ assert.match(css,/\.home-inspiration-grid > \.asset-card\s*\{ margin-bottom: 0; \}/);
+ const tracks=width=>Math.max(1,Math.floor((width+24)/(224+24)));
+ for(const [viewport,main,expected] of [[1366,1014,4],[1440,1088,4],[1920,1568,6],[2560,2208,9]]){
+  assert.equal(tracks(main),expected,`${viewport}px uses Main width`);
+  for(let cards=1;cards<=10;cards++)assert.ok(Math.min(cards,tracks(main))<=expected);
+ }
+ for(const file of ['components/inspiration-browser.tsx','components/asset-browser.tsx'])assert.ok(!fs.readFileSync(file,'utf8').includes('home-inspiration-grid'));
+ assert.match(fs.readFileSync('components/shell-frame.tsx','utf8'),/<header className="app-header sticky[^>]*>[\s\S]*?<main className="app-main/);
 });

@@ -31,6 +31,16 @@ button, input { font: inherit; }
 }
 .asset-masonry:has(> .asset-card:last-child:nth-child(-n + 4)) > .asset-card { margin-bottom: 0; }
 
+/* Recent inspiration is capped at a small set; grid fills horizontal tracks
+   instead of letting multicol balance the cards into a narrow left cluster. */
+.home-inspiration-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(14rem, 100%), 1fr));
+  gap: 1.5rem;
+  align-items: start;
+}
+.home-inspiration-grid > .asset-card { margin-bottom: 0; }
+
 /* Keep sidebar visibility and its reserved space under the same breakpoint. */
 .app-shell { width: 100%; min-width: 0; padding-left: 0; }
 .app-sidebar { display: none; overflow-y: auto; overscroll-behavior: contain; gap: 2rem; max-width: calc(100vw - 2rem); }
