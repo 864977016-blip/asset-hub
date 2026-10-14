@@ -17,6 +17,20 @@ export async function optimizeAndUploadImage(file: File, prefix: string, mark?: 
  const key = `${prefix}/${randomUUID()}.webp`;await client().send(new PutObjectCommand({ Bucket: config().bucket, Key: key, Body: output.data, ContentType: "image/webp" }));mark?.("r2");
  return { key, mimeType: "image/webp", sizeBytes: output.data.byteLength, width: output.info.width, height: output.info.height, originalName: file.name || "image" };
 }
+// Collected web images retain their verified source bytes and dimensions.
+export async function uploadCollectedImage(file: File, prefix: string, id: string, beforeUpload?: (image: { key:string; mimeType:string; sizeBytes:number; width:number; height:number; originalName:string }) => Promise<void>) {
+ if (!file.size || file.size > maxBytes) throw new Error("图片不能超过 20MB");
+ const bytes = Buffer.from(await file.arrayBuffer());
+ let meta: { format?: string; width?: number; height?: number };
+ try { meta = await sharp(bytes, { failOn: "error" }).metadata(); } catch { throw new Error("无法识别图片文件"); }
+ const mime = ({ jpeg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif", avif: "image/avif" } as Record<string,string>)[meta.format ?? ""];
+ if (!mime || !meta.width || !meta.height) throw new Error("不支持此图片格式");
+ const key = `${prefix}/${id}.${meta.format === "jpeg" ? "jpg" : meta.format}`;
+ const image={ key, mimeType:mime, sizeBytes:bytes.length, width:meta.width, height:meta.height, originalName:file.name||"image" };
+ await beforeUpload?.(image);
+ await client().send(new PutObjectCommand({ Bucket: config().bucket, Key: key, Body: bytes, ContentType: mime }));
+ return image;
+}
 export async function removeObject(key: string) { await client().send(new DeleteObjectCommand({ Bucket: config().bucket, Key: key })); }
 export async function readObject(key:string,mark?:(stage:"r2-get"|"r2-body")=>void){const result=await client().send(new GetObjectCommand({Bucket:config().bucket,Key:key}));mark?.("r2-get");if(!result.Body)throw new Error("图片不存在");const bytes=await result.Body.transformToByteArray();mark?.("r2-body");return{bytes,contentType:result.ContentType||"image/webp"};}
 export async function readObjectStream(key:string,mark?:()=>void){const result=await client().send(new GetObjectCommand({Bucket:config().bucket,Key:key}));mark?.();if(!(result.Body instanceof Readable))throw new Error("图片不存在");return{body:Readable.toWeb(result.Body),contentType:result.ContentType||"image/webp"};}
