@@ -5,13 +5,17 @@ import { arrayOrEmpty } from "@/lib/relation-values";
 
 import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import { useToast } from "@/components/toast";
-import type { Tag, Workstation } from "@/lib/types";
+import type { Tag, Workstation, ProductionPerson } from "@/lib/types";
 
 export const assetCategories = [["main", "主图"], ["scene", "副图"], ["a_plus", "A+"], ["other", "其他"]];
 export { ScopedTagEditor as TagEditor } from "./tag-tools";
 export function WorkstationSelector({ workstations, selected = [] }: { workstations: Workstation[]; selected?: Workstation[] }) {
   workstations = arrayOrEmpty(workstations); selected = arrayOrEmpty(selected);
   return <fieldset><legend className="mb-2 text-sm font-medium">工作站位置（可多选）</legend><div className="flex flex-wrap gap-3 text-sm text-zinc-600">{workstations.map(item => <label key={item.id} className="cursor-pointer"><input name="workstation_ids" value={item.id} defaultChecked={selected.some(value => value.id === item.id)} type="checkbox" className="accent-orange-brand" /> {item.id}号{item.current_user_name ? ` · ${item.current_user_name}` : ""}</label>)}</div></fieldset>;
+}
+export function ProductionPersonSelector({ people, selected = [] }: { people: ProductionPerson[]; selected?: ProductionPerson[] }) {
+  const options = [...new Map([...people.filter(person => !person.disabled_at), ...selected].map(person => [person.id, person])).values()];
+  return <fieldset><legend className="mb-2 text-sm font-medium">制作人员（可多选）</legend><input type="hidden" name="production_people_present" value="1"/><div className="flex flex-wrap gap-3 text-sm text-zinc-600">{options.map(person => <label key={person.id} className="cursor-pointer"><input name="production_person_ids" value={person.id} defaultChecked={selected.some(value => value.id === person.id)} type="checkbox" className="accent-orange-brand"/> {person.name}{person.disabled_at ? "（已停用）" : ""}</label>)}</div></fieldset>;
 }
 export function ImagePreview({ src, alt }: { src: string | null; alt: string }) {
   return <div className="grid min-h-64 place-items-center bg-zinc-100 p-5"><AssetImage src={src} alt={alt} loading="eager" className="max-h-[65vh] w-full object-contain" placeholderClassName="min-h-64 w-full" /></div>;

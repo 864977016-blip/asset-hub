@@ -58,7 +58,7 @@ test('tag editors stay in their own pool; members create but cannot organize',()
  assert.equal(renderToString(React.createElement(TeamProvider,value,React.createElement(TagOrganizer,{scope:'store'}))), '');
 });
 test('handbook Header hides global plus; final sidebar contains no shared/tag/settings entry',async()=>{
- const load=uiLoader({'@/lib/data':{getV1Ready:async()=>true,getSidebarData:async()=>({profile:{displayName:'用户',role:'member'},stores:[]}),getTags:async()=>[],getWorkstations:async()=>[],getActiveStoreOptions:async()=>[]}});
+ const load=uiLoader({'@/lib/data':{getV1Ready:async()=>true,getSidebarData:async()=>({profile:{displayName:'用户',role:'member'},stores:[]}),getTags:async()=>[],getWorkstations:async()=>[],getProductionPeople:async()=>[],getActiveStoreOptions:async()=>[]}});
  const html=renderToString(await load('components/app-shell.tsx').AppShell({active:'创作手册',children:'rules'}));assert.ok(!html.includes('aria-label="新增素材"'));assert.ok(html.includes('搜索灵感、资产、标签'));assert.ok(html.includes('href="/handbook"'));assert.ok(!html.includes('href="/shared"'));assert.ok(!html.includes('href="/tags"'));assert.ok(!html.includes('>设置<'));
 });
 test('move reconciles a lost committed response while confirmed transaction failure retains original',async()=>{

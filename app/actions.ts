@@ -9,6 +9,9 @@ import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { env } from "node:process";
 async function admin() { return (await session(true)).s; }
+export async function createProductionPerson(form:FormData){const s=await admin();const name=String(form.get("name")||"").trim();if(!name)throw new Error("请输入姓名");const {error}=await s.from("production_people").insert({name});if(error)throw new Error("新增制作人员失败，请重试。");revalidatePath("/workstations");}
+export async function renameProductionPerson(id:string,form:FormData){const s=await admin();const name=String(form.get("name")||"").trim();if(!name)throw new Error("请输入姓名");const {data,error}=await s.from("production_people").update({name}).eq("id",id).select("id").single();if(error||!data)throw new Error("修改姓名失败，请重试。");revalidatePath("/workstations");revalidatePath(`/workstations/people/${id}`);}
+export async function disableProductionPerson(id:string){const s=await admin();const {data,error}=await s.from("production_people").update({disabled_at:new Date().toISOString()}).eq("id",id).is("disabled_at",null).select("id").single();if(error||!data)throw new Error("停用失败，请重试。");revalidatePath("/workstations");revalidatePath(`/workstations/people/${id}`);}
 const slug=(v:string)=>`${v.trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g,"-").replace(/^-|-$/g,"")}-${Date.now().toString(36)}`;
 const refreshStoreViews = () => { revalidatePath("/", "layout"); revalidatePath("/stores"); };
 export async function createStore(form:FormData){const s=await admin();const name=String(form.get("name")||"").trim();if(!name)throw new Error("店铺名称不能为空");const {data:{user}}=await s.auth.getUser();const {error}=await s.from("stores").insert({name,slug:slug(name),description:String(form.get("description")||""),created_by:user!.id});if(error)throw new Error(error.message||"无法创建店铺");refreshStoreViews();}
@@ -56,19 +59,19 @@ function recordActivityAfter(s:Awaited<ReturnType<typeof createClient>>,actorId:
 export async function uploadStoreAsset(storeId:string, form:FormData) {
  const {s,user}=await userClient(),parentProductId=String(form.get("parent_product_id")||"")||null,category=String(form.get("category")||"other"),file=form.get("image");
  if(!["main","scene","a_plus","other"].includes(category))throw new Error("请选择有效分类");if(!(file instanceof File))throw new Error("请选择图片");
- const [store,parent,relations]=await Promise.all([
+ const [store,parent,relations,personIds]=await Promise.all([
   s.from("stores").select("id").eq("id",storeId).is("archived_at",null).single(),
   parentProductId?s.from("parent_products").select("id").eq("id",parentProductId).eq("store_id",storeId).maybeSingle():Promise.resolve({data:null,error:null}),
-  relationSelection(s,form)
+  relationSelection(s,form,false),productionPersonSelection(s,form)
  ]);
  if(store.error||!store.data)throw new Error("店铺不存在或已归档");if(parentProductId&&(parent.error||!parent.data))throw new Error("所选父体不属于当前店铺");
- const fallbackTitle=file.name.replace(/\.[^.]+$/, "")||"未命名素材",{tagIds,workstationIds}=relations;
+ const fallbackTitle=file.name.replace(/\.[^.]+$/, "")||"未命名素材",{tagIds}=relations;
  const {data:asset,error}=await s.from("store_assets").insert({store_id:storeId,parent_product_id:parentProductId,title:fallbackTitle,description:String(form.get("description")||""),asset_category:category,created_by:user.id}).select("id").single();if(error||!asset)throw new Error(error?.message||"无法创建素材");
  let uploadedKey:string|null=null;try{
   const image=await optimizeAndUploadImage(file,`stores/${storeId}/assets`);uploadedKey=image.key;
   const {error:fileError}=await s.from("asset_files").insert({store_asset_id:asset.id,original_name:image.originalName,storage_key:image.key,mime_type:image.mimeType,size_bytes:image.sizeBytes,width:image.width,height:image.height,kind:"image",created_by:user.id});if(fileError){await removeObject(image.key);throw new Error(fileError.message)}
-  await Promise.all([insertRelations(s,"store_asset_workstations","store_asset_id",asset.id,"workstation_id",workstationIds),insertRelations(s,"store_asset_tags","store_asset_id",asset.id,"tag_id",tagIds)]);
-  recordActivityAfter(s,user.id,"store_asset",asset.id,"store_asset_created");revalidatePath(`/stores/${storeId}`);revalidatePath("/stores");refreshWorkstationViews(workstationIds);revalidatePath("/");
+  await Promise.all([insertRelations(s,"store_asset_production_people","store_asset_id",asset.id,"production_person_id",personIds),insertRelations(s,"store_asset_tags","store_asset_id",asset.id,"tag_id",tagIds)]);
+  recordActivityAfter(s,user.id,"store_asset",asset.id,"store_asset_created");revalidatePath(`/stores/${storeId}`);revalidatePath("/stores");revalidatePath("/workstations/people/[id]","page");revalidatePath("/");
  }catch(e){const {error:cleanupError}=await s.from("store_assets").delete().eq("id",asset.id);if(!cleanupError&&uploadedKey)await removeObject(uploadedKey).catch(()=>{});throw e}
 }
 export async function createInspiration(form: FormData) {
@@ -106,6 +109,15 @@ async function relationSelection(s: Awaited<ReturnType<typeof createClient>>, fo
   if(tags.error)throw new Error(tags.error.message);if(tags.data?.length!==tagIds.length)throw new Error("部分标签已失效，请刷新后重试");
   if(workstations.error)throw new Error(workstations.error.message);if(workstations.data?.length!==workstationIds.length)throw new Error("部分工作站已失效，请刷新后重试");
   return { tagIds, workstationIds };
+}
+async function productionPersonSelection(s: Awaited<ReturnType<typeof createClient>>, form: FormData) {
+  const raw=form.getAll("production_person_ids").map(String);
+  const ids=[...new Set(raw)];
+  if(raw.length!==ids.length||ids.some(id=>!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)))throw new Error("制作人员选择无效");
+  if(!ids.length)return ids;
+  const {data,error}=await s.from("production_people").select("id").in("id",ids).is("disabled_at",null);
+  if(error||data?.length!==ids.length)throw new Error("部分制作人员已失效，请刷新后重试");
+  return ids;
 }
 async function insertRelations(s:Awaited<ReturnType<typeof createClient>>,table:string,parentKey:string,id:string,targetKey:string,ids:(string|number)[]){
  if(!ids.length)return;const {data,error}=await s.from(table).insert(ids.map(value=>({[parentKey]:id,[targetKey]:value}))).select(targetKey);if(error)throw new Error(error.message);if(data?.length!==ids.length)throw new Error("关联保存失败，请刷新后重试");
@@ -171,12 +183,10 @@ export async function updateSharedAsset(id: string, form: FormData) {
   const description = String(form.get("description") || "").trim() || null;
   const { workstationIds } = await relationSelection(s, form, true, false);
   const storeIds = await sharedStoreSelection(s, form, id);
-  const { data, error } = await s.from("shared_assets").update({ description }).eq("id", id).select("id").single();
-  if (error || !data) throw new Error(error?.message || "共享素材不存在或没有编辑权限");
-  try {
-    await replaceRelations(s, "shared_asset_stores", "shared_asset_id", id, "store_id", storeIds);
-    await replaceRelations(s, "shared_asset_workstations", "shared_asset_id", id, "workstation_id", workstationIds);
-  } finally { revalidatePath("/shared"); revalidatePath("/stores"); revalidatePath("/stores/[id]", "page"); refreshWorkstationViews(); revalidatePath("/"); }
+  const personIds=form.has("production_people_present")?[...new Set(form.getAll("production_person_ids").map(String))]:null;
+  const {error}=await s.rpc("v5_update_shared_asset",{p_id:id,p_description:description,p_store_ids:storeIds,p_workstation_ids:workstationIds,p_person_ids:personIds});
+  if(error)fail(error);
+  revalidatePath("/shared"); revalidatePath("/stores"); revalidatePath("/stores/[id]", "page"); refreshWorkstationViews(); revalidatePath("/workstations/people/[id]","page"); revalidatePath("/");
 }
 export async function updateStoreAsset(id: string, form: FormData) {
   const { s } = await userClient();
@@ -185,12 +195,10 @@ export async function updateStoreAsset(id: string, form: FormData) {
   const includesTags=form.has("tag_ids");
   const { tagIds, workstationIds } = await relationSelection(s, form, true, includesTags);
   const parentProductId=String(form.get("parent_product_id")||"")||null;
-  const { data, error } = await s.from("store_assets").update({ asset_category: category,...(form.has("parent_product_id")?{parent_product_id:parentProductId}:{}) }).eq("id", id).select("id,store_id").single();
-  if (error || !data) throw new Error(error?.message || "素材不存在或没有编辑权限");
-  try {
-    if(includesTags)await replaceRelations(s, "store_asset_tags", "store_asset_id", id, "tag_id", tagIds);
-    await replaceRelations(s, "store_asset_workstations", "store_asset_id", id, "workstation_id", workstationIds);
-  } finally { revalidatePath('/stores/' + data.store_id); revalidatePath("/stores"); refreshWorkstationViews(); revalidatePath("/"); }
+  const personIds=form.has("production_people_present")?[...new Set(form.getAll("production_person_ids").map(String))]:null;
+  const {data:storeId,error}=await s.rpc("v5_update_store_asset",{p_id:id,p_category:category,p_change_parent:form.has("parent_product_id"),p_parent_id:parentProductId,p_tag_ids:includesTags?tagIds:null,p_workstation_ids:workstationIds,p_person_ids:personIds});
+  if(error||!storeId)fail(error||new Error("素材不存在或没有编辑权限"));
+  revalidatePath('/stores/' + storeId); revalidatePath("/stores"); refreshWorkstationViews(); revalidatePath("/workstations/people/[id]","page"); revalidatePath("/");
 }
 
 export async function saveParentProduct(storeId:string,id:string|null,form:FormData){const {s}=await session();const {error}=await s.rpc("v4_save_parent",{p_id:id,p_store_id:storeId,p_name:String(form.get("name")||""),p_tag_ids:form.getAll("product_tag_ids").map(String).filter(Boolean)});if(error)fail(error);refreshStoreViews();}
@@ -204,7 +212,7 @@ export async function createSharedAsset(form:FormData) {
  const mark=(stage:string)=>{if(!measuring)return;const now=performance.now();console.info(`[shared-upload:${requestId}] ${stage}`,{stageMs:Math.round(now-previous),totalMs:Math.round(now-started)});previous=now};
  mark("1. Server Action entered");
  const {s,user}=await userClient(),file=form.get("image");mark("2. Authentication complete");if(!(file instanceof File))throw new Error("请选择图片");
- const [storeIds,{workstationIds}]=await Promise.all([sharedStoreSelection(s,form),relationSelection(s,form,true,false)]),fallbackTitle=file.name.replace(/\.[^.]+$/, "")||"未命名共享素材";mark("3. Associations validated");
+ const [storeIds,personIds]=await Promise.all([sharedStoreSelection(s,form),productionPersonSelection(s,form)]),fallbackTitle=file.name.replace(/\.[^.]+$/, "")||"未命名共享素材";mark("3. Associations validated");
  const {data:asset,error}=await s.from("shared_assets").insert({title:fallbackTitle,description:String(form.get("description")||""),asset_type:"other",created_by:user.id}).select("id").single();if(error||!asset)throw new Error(error?.message||"无法创建共享素材");
  mark("4. Asset row created");
  let uploadedKey:string|null=null;try{
@@ -212,9 +220,9 @@ export async function createSharedAsset(form:FormData) {
   const {data:fileRow,error:fileError}=await s.from("asset_files").insert({shared_asset_id:asset.id,original_name:image.originalName,storage_key:image.key,mime_type:image.mimeType,size_bytes:image.sizeBytes,width:image.width,height:image.height,kind:"image",created_by:user.id}).select("id").single();if(fileError||!fileRow){await removeObject(image.key);throw new Error(fileError?.message||"无法保存图片")}
   mark("8. asset_files row created");
   const {error:previewError}=await s.from("shared_assets").update({preview_file_id:fileRow.id}).eq("id",asset.id);if(previewError)throw new Error(previewError.message);
-  await Promise.all([insertRelations(s,"shared_asset_stores","shared_asset_id",asset.id,"store_id",storeIds),insertRelations(s,"shared_asset_workstations","shared_asset_id",asset.id,"workstation_id",workstationIds)]);
+  await Promise.all([insertRelations(s,"shared_asset_stores","shared_asset_id",asset.id,"store_id",storeIds),insertRelations(s,"shared_asset_production_people","shared_asset_id",asset.id,"production_person_id",personIds)]);
   mark("9. Asset associations created");
-  recordActivityAfter(s,user.id,"shared_asset",asset.id,"shared_asset_created");revalidatePath("/shared");revalidatePath("/stores");for(const id of storeIds)revalidatePath(`/stores/${id}`);refreshWorkstationViews(workstationIds);revalidatePath("/");mark("10. Revalidation scheduled");
+  recordActivityAfter(s,user.id,"shared_asset",asset.id,"shared_asset_created");revalidatePath("/shared");revalidatePath("/stores");for(const id of storeIds)revalidatePath(`/stores/${id}`);revalidatePath("/workstations/people/[id]","page");revalidatePath("/");mark("10. Revalidation scheduled");
   mark("11. Before Server Action return");return {id:asset.id,requestId};
  }catch(e){const {error:cleanupError}=await s.from("shared_assets").delete().eq("id",asset.id);if(!cleanupError&&uploadedKey)await removeObject(uploadedKey).catch(()=>{});throw e}
 }

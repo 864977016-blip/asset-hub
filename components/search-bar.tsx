@@ -9,14 +9,14 @@ import { InspirationDetail } from "./inspiration-browser";
 import { SharedAssetDetail, StoreAssetDetail } from "./asset-browser";
 import { AssetImage } from "./asset-image";
 import type { HomeUploadOptions } from "./home-upload";
-import type { AssetDetail, Inspiration, SearchResults } from "@/lib/types";
+import type { AssetDetail, Inspiration, SearchResults, ProductionPerson } from "@/lib/types";
 
 type Selection = { kind: "inspiration"; item: Inspiration } | { kind: "asset"; item: AssetDetail };
 function Group({ title, children }: { title: string; children: ReactNode }) {
   return <section className="border-b border-zinc-100 py-2 last:border-0"><h3 className="px-3 py-1 text-xs font-medium text-zinc-400">{title}</h3>{children}</section>;
 }
 const rowClass = "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm hover:bg-orange-brand/5 focus-visible:outline-orange-brand";
-export function SearchBar({ tags, stores, workstations }: HomeUploadOptions) {
+export function SearchBar({ tags, stores, workstations, people }: HomeUploadOptions & { people: ProductionPerson[] }) {
   const [promptId,setPromptId]=useState<string|null>(null);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -69,6 +69,6 @@ export function SearchBar({ tags, stores, workstations }: HomeUploadOptions) {
   </div>
   {promptId && <PromptDetail id={promptId} onClose={()=>setPromptId(null)}/> }
   {selection?.kind === "inspiration" && <InspirationDetail item={selection.item} tags={tags} onClose={() => setSelection(null)} />}
-  {selection?.kind === "asset" && (selection.item.kind === "shared" ? <SharedAssetDetail item={selection.item} tags={[]} stores={stores} workstations={workstations} onClose={() => setSelection(null)} /> : <StoreAssetDetail stores={stores} item={selection.item} tags={tags} workstations={workstations} onClose={() => setSelection(null)} />)}
+  {selection?.kind === "asset" && (selection.item.kind === "shared" ? <SharedAssetDetail item={selection.item} tags={[]} stores={stores} workstations={workstations} people={people} onClose={() => setSelection(null)} /> : <StoreAssetDetail stores={stores} item={selection.item} tags={tags} workstations={workstations} people={people} onClose={() => setSelection(null)} />)}
   </>;
 }

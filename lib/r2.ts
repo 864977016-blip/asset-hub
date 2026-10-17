@@ -8,27 +8,25 @@ const maxBytes = 20 * 1024 * 1024;
 function config() { const required = ["R2_BUCKET_NAME", "R2_ENDPOINT", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"] as const; if (required.some(key => !process.env[key])) throw new Error("R2 存储未配置"); return { bucket: process.env.R2_BUCKET_NAME!, endpoint: process.env.R2_ENDPOINT!, accessKeyId: process.env.R2_ACCESS_KEY_ID!, secretAccessKey: process.env.R2_SECRET_ACCESS_KEY! }; }
 let sharedClient:S3Client|undefined;
 function client(){if(sharedClient)return sharedClient;const c=config();return sharedClient=new S3Client({region:"auto",endpoint:c.endpoint,credentials:{accessKeyId:c.accessKeyId,secretAccessKey:c.secretAccessKey}});}
-export async function optimizeAndUploadImage(file: File, prefix: string, mark?: (stage: "file-read" | "sharp" | "r2") => void) {
+async function compressImage(file: File, mark?: (stage: "file-read" | "sharp" | "r2") => void) {
  if (!file.size || file.size > maxBytes) throw new Error("图片不能超过 20MB");
  const input = Buffer.from(await file.arrayBuffer());mark?.("file-read");
  let image;try { image = sharp(input, { failOn: "error" }).rotate(); } catch { throw new Error("无法识别图片文件"); }
  const meta = await image.metadata();if (!meta.width || !meta.height || !meta.format) throw new Error("无法识别图片文件");
  const output = await image.resize({ width: 2400, height: 2400, fit: "inside", withoutEnlargement: true }).webp({ quality: 83 }).toBuffer({ resolveWithObject: true });mark?.("sharp");
+ return output;
+}
+export async function optimizeAndUploadImage(file: File, prefix: string, mark?: (stage: "file-read" | "sharp" | "r2") => void) {
+ const output = await compressImage(file, mark);
  const key = `${prefix}/${randomUUID()}.webp`;await client().send(new PutObjectCommand({ Bucket: config().bucket, Key: key, Body: output.data, ContentType: "image/webp" }));mark?.("r2");
  return { key, mimeType: "image/webp", sizeBytes: output.data.byteLength, width: output.info.width, height: output.info.height, originalName: file.name || "image" };
 }
-// Collected web images retain their verified source bytes and dimensions.
 export async function uploadCollectedImage(file: File, prefix: string, id: string, beforeUpload?: (image: { key:string; mimeType:string; sizeBytes:number; width:number; height:number; originalName:string }) => Promise<void>) {
- if (!file.size || file.size > maxBytes) throw new Error("图片不能超过 20MB");
- const bytes = Buffer.from(await file.arrayBuffer());
- let meta: { format?: string; width?: number; height?: number };
- try { meta = await sharp(bytes, { failOn: "error" }).metadata(); } catch { throw new Error("无法识别图片文件"); }
- const mime = ({ jpeg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif", avif: "image/avif" } as Record<string,string>)[meta.format ?? ""];
- if (!mime || !meta.width || !meta.height) throw new Error("不支持此图片格式");
- const key = `${prefix}/${id}.${meta.format === "jpeg" ? "jpg" : meta.format}`;
- const image={ key, mimeType:mime, sizeBytes:bytes.length, width:meta.width, height:meta.height, originalName:file.name||"image" };
+ const output = await compressImage(file);
+ const key = `${prefix}/${id}.webp`;
+ const image={ key, mimeType:"image/webp", sizeBytes:output.data.byteLength, width:output.info.width, height:output.info.height, originalName:file.name||"image" };
  await beforeUpload?.(image);
- await client().send(new PutObjectCommand({ Bucket: config().bucket, Key: key, Body: bytes, ContentType: mime }));
+ await client().send(new PutObjectCommand({ Bucket: config().bucket, Key: key, Body: output.data, ContentType: "image/webp" }));
  return image;
 }
 export async function removeObject(key: string) { await client().send(new DeleteObjectCommand({ Bucket: config().bucket, Key: key })); }

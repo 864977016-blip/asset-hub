@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useReducer, useRef, type ReactNode } from "react";
 import { InspirationModal } from "@/components/inspiration-upload";
@@ -8,7 +9,7 @@ import { useClipboardImage, usePageImageDrop } from "@/components/image-drop-zon
 import { useToast } from "@/components/toast";
 import { relationMany } from "@/lib/relation-values";
 import { emptyHomeUpload, homeUploadReducer } from "@/lib/home-upload-state";
-import type { StoreOption, Tag, Workstation } from "@/lib/types";
+import type { StoreOption, Tag, Workstation, ProductionPerson } from "@/lib/types";
 
 export type HomeUploadOptions = { stores: StoreOption[]; tags: Tag[]; storeTags?: Tag[]; workstations: Workstation[] };
 const HomeUploadContext = createContext<(() => void) | null>(null);
@@ -21,14 +22,15 @@ export function HomeAddButton() {
   const open = useContext(HomeUploadContext);
   return <button type="button" aria-label="新增素材" onClick={() => open?.()} className="grid h-9 w-9 place-items-center rounded-full bg-orange-brand text-white shadow-card transition hover:bg-orange-deep"><Plus size={18} /></button>;
 }
-export function HomeUploadProvider({ stores, tags, workstations, children, storeTags = [], captureImages = false }: HomeUploadOptions & { children: ReactNode; captureImages?: boolean }) {
+export function HomeUploadProvider({ stores, tags, people, children, storeTags = [], captureImages = false, captureDrop = false, initialPersonId }: HomeUploadOptions & { people: ProductionPerson[]; children: ReactNode; captureImages?: boolean; captureDrop?: boolean; initialPersonId?: string }) {
   const [state, dispatch] = useReducer(homeUploadReducer, emptyHomeUpload);
+  const router = useRouter();
   const toast = useToast();
   const active = state.step !== "closed";
   const receive = useCallback((file: File, sourceUrl?: string) => dispatch({ type: "open", file, sourceUrl }), []);
   const unsupported = useCallback(() => toast({ message: "未取得图片文件，请复制图片后粘贴或选择本地图片。", error: true }), [toast]);
   useClipboardImage(receive, captureImages && !active);
-  const { isDragging } = usePageImageDrop(receive, unsupported, captureImages && !active, true);
+  const { isDragging } = usePageImageDrop(receive, unsupported, (captureImages || captureDrop) && !active, true);
   useEffect(() => {
     if (!active) return;
     const overflow = document.body.style.overflow;
@@ -41,6 +43,8 @@ export function HomeUploadProvider({ stores, tags, workstations, children, store
   }, [active]);
   const close = () => dispatch({ type: "close" });
   const availableStores = relationMany(stores).filter(store => !store.archivedAt);
+  const initialPeople = people.filter(person => person.id === initialPersonId && !person.disabled_at);
+  const uploaded = initialPersonId ? () => router.refresh() : undefined;
   return <HomeUploadContext.Provider value={() => dispatch({ type: "open" })}>{children}{active && <span hidden data-global-upload="true" />}
     {isDragging && !active && <div className="pointer-events-none fixed inset-0 z-50 grid place-items-center bg-ink/15 backdrop-blur-[1px]"><div className="rounded-2xl border border-orange-brand/40 bg-white/95 px-10 py-8 text-lg font-bold shadow-float">松开以添加素材</div></div>}
     {state.step === "target" && <TargetDialog title="添加素材" onClose={close}><p className="mb-4 text-sm text-zinc-500">选择保存位置{state.file ? " · 图片已保留" : ""}</p><div className="space-y-3">{[
@@ -50,7 +54,7 @@ export function HomeUploadProvider({ stores, tags, workstations, children, store
     ].map(target => <button type="button" key={target.id} onClick={() => dispatch({ type: "target", target: target.id })} className="block w-full rounded-xl border border-zinc-200 p-4 text-left transition hover:border-orange-brand hover:bg-orange-brand/5"><span className="font-semibold">{target.title}</span><span className="mt-1 block text-sm text-zinc-500">{target.description}</span></button>)}</div></TargetDialog>}
     {state.step === "store-picker" && <TargetDialog title="选择店铺" onClose={close}><button type="button" onClick={() => dispatch({ type: "back" })} className="mb-4 text-sm text-zinc-500 hover:text-orange-brand">← 返回保存位置</button><div className="grid gap-3 sm:grid-cols-2">{availableStores.map(store => <button key={store.id} type="button" onClick={() => dispatch({ type: "store", id: store.id })} className="rounded-xl border border-zinc-200 p-4 text-left font-medium transition hover:border-orange-brand hover:bg-orange-brand/5">{store.name}</button>)}</div>{!availableStores.length && <p className="py-8 text-center text-sm text-zinc-500">还没有店铺。<Link href="/stores" onClick={close} className="text-orange-brand">前往管理店铺 →</Link></p>}</TargetDialog>}
     {state.step === "inspiration" && <InspirationModal open initialFile={state.file} initialSourceUrl={state.sourceUrl} tags={tags} onClose={close} />}
-    {state.step === "shared" && <SharedAssetModal open initialFile={state.file} stores={availableStores} workstations={workstations} onClose={close} />}
-    {state.step === "store" && state.storeId && <StoreAssetModal key={state.storeId} open initialFile={state.file} storeId={state.storeId} workstations={workstations} onClose={close} />}
+    {state.step === "shared" && <SharedAssetModal open initialFile={state.file} stores={availableStores} people={people} initialPeople={initialPeople} onUploaded={uploaded} onClose={close} />}
+    {state.step === "store" && state.storeId && <StoreAssetModal key={state.storeId} open initialFile={state.file} storeId={state.storeId} people={people} initialPeople={initialPeople} onUploaded={uploaded} onClose={close} />}
   </HomeUploadContext.Provider>;
 }

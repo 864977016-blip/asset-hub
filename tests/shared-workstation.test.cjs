@@ -56,7 +56,17 @@ function database() {
     asset_files: [], activities: [],
   };
   const calls = [], paths = [], media = [];
-  const client = { auth: { getUser: async () => ({ data: { user: { id: 'u' } } }) }, from(table) {
+  const client = { auth: { getUser: async () => ({ data: { user: { id: 'u' } } }) }, rpc: async (name,args) => {
+    if(name!=='v5_update_shared_asset')throw Error(name);
+    calls.push({rpc:name,args:plain(args)});
+    const asset=tables.shared_assets.find(row=>row.id===args.p_id);
+    asset.description=args.p_description;
+    tables.shared_asset_stores=tables.shared_asset_stores.filter(row=>row.shared_asset_id!==args.p_id||row.store_id==='old'||args.p_store_ids.includes(row.store_id));
+    for(const id of args.p_store_ids)if(!tables.shared_asset_stores.some(row=>row.shared_asset_id===args.p_id&&row.store_id===id))tables.shared_asset_stores.push({shared_asset_id:args.p_id,store_id:id});
+    tables.shared_asset_workstations=tables.shared_asset_workstations.filter(row=>row.shared_asset_id!==args.p_id||args.p_workstation_ids.includes(row.workstation_id));
+    for(const id of args.p_workstation_ids)if(!tables.shared_asset_workstations.some(row=>row.shared_asset_id===args.p_id&&row.workstation_id===id))tables.shared_asset_workstations.push({shared_asset_id:args.p_id,workstation_id:id});
+    return {data:null,error:null};
+  }, from(table) {
     let operation = 'read', payload, fields = '', conditions = [];
     const q = {
       select(value) { fields = value; return q; },
@@ -114,15 +124,22 @@ test('shared edit supports no stores and refuses new archived selections', async
   assert.equal(d.tables.shared_asset_tags.length, 1);
 });
 
-test('shared upload associates multiple active stores/locations without writing tags', async () => {
+test('shared upload associates multiple active stores and people without writing legacy locations', async () => {
   const d = database();
-  await d.actions.createSharedAsset(form({ image: new File(['x'], 'image.png', { type: 'image/png' }), store_ids: ['a', 'b'], workstation_ids: ['2', '5'], description: '上传备注', tag_ids: ['ignore'] }));
+  d.tables.production_people=[{id:'00000000-0000-0000-0000-000000000001',disabled_at:null},{id:'00000000-0000-0000-0000-000000000002',disabled_at:null}];
+  d.tables.shared_asset_production_people=[];
+  await d.actions.createSharedAsset(form({ image: new File(['x'], 'image.png', { type: 'image/png' }), store_ids: ['a', 'b'], production_person_ids: d.tables.production_people.map(p=>p.id), description: '上传备注', tag_ids: ['ignore'] }));
   const created = d.tables.shared_assets.at(-1);
   assert.equal(created.asset_type, 'other');
   assert.equal(created.description, '上传备注');
   assert.equal(d.tables.shared_asset_stores.filter(row => row.shared_asset_id === created.id).length, 2);
-  assert.equal(d.tables.shared_asset_workstations.filter(row => row.shared_asset_id === created.id).length, 2);
+  assert.equal(d.tables.shared_asset_workstations.filter(row => row.shared_asset_id === created.id).length, 0);
+  assert.equal(d.tables.shared_asset_production_people.filter(row => row.shared_asset_id === created.id).length, 2);
   assert.equal(d.tables.shared_asset_tags.length, 1);
+  await assert.rejects(d.actions.createSharedAsset(form({image:new File(['x'],'image.png'),production_person_ids:[d.tables.production_people[0].id,d.tables.production_people[0].id]})),/制作人员选择无效/);
+  d.tables.production_people[0].disabled_at='2026-01-01';
+  await assert.rejects(d.actions.createSharedAsset(form({image:new File(['x'],'image.png'),production_person_ids:d.tables.production_people[0].id})),/制作人员已失效/);
+  assert.equal(d.tables.shared_assets.length,2);
 });
 
 test('shared upload timing is development-only and covers server plus perceived UI stages',()=>{
@@ -147,15 +164,21 @@ test('workstation rename is admin-only and updates no notes or asset relations',
 test('null-safe shared/workstation rendering hides removed fields and preserves existing store details', () => {
   const load = loader({ '@/app/actions': new Proxy({}, { get: () => async () => {} }), 'next/navigation': { useRouter: () => ({ refresh() {} }) } });
   const { AssetBrowser, SharedAssetDetail, StoreAssetDetail } = load('components/asset-browser.tsx');
+  const { ProductionPersonSelector } = load('components/asset-detail-modal.tsx');
+  const person={id:'00000000-0000-0000-0000-000000000001',name:'王艺晓',disabled_at:'2026-01-01'};
+  const selector=renderToString(React.createElement(ProductionPersonSelector,{people:[],selected:[person]}));
+  assert.ok(selector.includes('王艺晓')&&selector.includes('已停用')&&selector.includes('checked=""')&&selector.includes('production_people_present'));
   const { WorkstationCards } = load('components/workstation-cards.tsx');
   const item = { id: 's', kind: 'shared', tags: null, stores: null, workstations: null, image: null, createdAt: '', note: null };
   for (const kind of ['shared', 'workstation']) assert.doesNotThrow(() => renderToString(React.createElement(AssetBrowser, { assets: [item], tags: null, stores: null, workstations: null, kind })));
   const shared = renderToString(React.createElement(SharedAssetDetail, { item, tags: [], stores: [], workstations: [], onClose() {} }));
   assert.ok(!shared.includes('>标签<') && !shared.includes('>类型<'));
-  assert.ok(shared.includes('所属店铺') && shared.includes('通用素材') && shared.includes('备注'));
+  assert.ok(shared.includes('所属店铺') && shared.includes('通用素材') && shared.includes('备注') && shared.includes('制作人员') && shared.includes('未指定'));
+  const named = renderToString(React.createElement(SharedAssetDetail, {item:{...item,productionPeople:[person]},tags:[],stores:[],workstations:[],people:[],onClose(){}}));
+  assert.ok(named.includes('王艺晓')&&!named.includes('工作站位置'));
   const parents=[{id:'p',name:'拱形全身镜',tags:[{id:'t',name:'铝框镜'}]}];
   const store = renderToString(React.createElement(StoreAssetDetail, { item: { ...item, kind: 'store', parentProductId:'p', store:{name:'Delma'} }, parents, tags: [], workstations: [], onClose() {} }));
-  assert.ok(store.includes('分类')&&store.includes('父体')&&store.includes('拱形全身镜')&&store.includes('标签')&&store.includes('铝框镜')&&store.includes('Delma'));assert.ok(!store.includes('上传时间'));
+  assert.ok(store.includes('分类')&&store.includes('父体')&&store.includes('拱形全身镜')&&store.includes('标签')&&store.includes('铝框镜')&&store.includes('Delma')&&store.includes('制作人员'));assert.ok(!store.includes('上传时间')&&!store.includes('工作站位置'));
   const unclassified=renderToString(React.createElement(StoreAssetDetail,{item:{...item,kind:'store'},parents,tags:[],workstations:[],onClose(){}}));assert.ok(unclassified.includes('未归类')&&unclassified.includes('—'));
   const untagged=renderToString(React.createElement(StoreAssetDetail,{item:{...item,kind:'store',parentProductId:'empty'},parents:[{id:'empty',name:'无标签父体',tags:[]}],tags:[],workstations:[],onClose(){}}));assert.ok(untagged.includes('无标签父体')&&untagged.includes('—'));
   const cards = renderToString(React.createElement(WorkstationCards, { workstations: [{ id: 2, count: 0, previews: null, current_user_name: null }], canEdit: false }));
@@ -175,7 +198,7 @@ test('failed images become placeholders and a new image URL can load again', () 
 
 test('server data keeps archived ownership, normalizes relation shapes, and sorts latest first', async () => {
   const calls = [];
-  const store = { id: 'a', store_id: 'old', asset_category: 'scene', created_at: '2026-01-01', updated_at: '2026-09-22', store: [{ id: 'old', name: '历史店铺', archived_at: '2026-02-01' }], asset_files: { id: 'f1' }, store_asset_tags: null, store_asset_workstations: { workstations: [{ id: '2', current_user_name: null }] } };
+  const store = { id: 'a', store_id: 'old', asset_category: 'scene', created_at: '2026-01-01', updated_at: '2026-09-22', store: [{ id: 'old', name: '历史店铺', archived_at: '2026-02-01' }], asset_files: { id: 'f1' }, store_asset_tags: null, store_asset_workstations: { workstations: [{ id: '2', current_user_name: null }] },store_asset_production_people:[{production_people:{id:'person',name:'王艺晓',disabled_at:'2026-01-01'}}] };
   const shared = { id: 's', description: null, created_at: '2026-01-02', updated_at: '2026-09-21', preview_file: [{ id: 'f2' }], shared_asset_stores: { store_id: 'old', stores: null }, shared_asset_workstations: [{ workstations: { id: 2 } }, { workstations: { id: 5 } }] };
   const client = { from(table) {
     const q = { select(fields) { calls.push({ table, fields }); return q; }, eq() { return q; }, order() { return q; }, limit() { return q; }, then(resolve, reject) {
@@ -188,6 +211,7 @@ test('server data keeps archived ownership, normalizes relation shapes, and sort
   assert.equal(assets[0].id, 'a');
   assert.equal(assets[0].store.name, '历史店铺');
   assert.equal(assets[0].workstations[0].id, 2);
+  assert.equal(assets[0].productionPeople[0].name,'王艺晓');
   assert.equal(assets[1].stores[0].id, 'old'); // Hidden store relation still is NOT general material.
   assert.equal(assets[1].workstations.length, 2);
   assert.equal(assets[1].tags.length, 0);
