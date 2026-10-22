@@ -42,8 +42,9 @@ test('all asset walls keep natural ratios; parent detail excludes Shared categor
 test('parent detail switches locally while preserving direct URLs and browser history',()=>{
  const source=fs.readFileSync('components/parent-product-browser.tsx','utf8');assert.match(source,/useState\(initialParent\?\?""\)/);assert.match(source,/addEventListener\("popstate"/);assert.match(source,/history\[replace\?"replaceState":"pushState"\]/);assert.match(source,/searchParams\.set\("parent",id\)/);assert.doesNotMatch(source,/useRouter|<Link/);
 });
-test('modal mutations rely on action revalidation without duplicate client refreshes',()=>{
- for(const file of ['components/asset-detail-modal.tsx','components/asset-commands.tsx','components/image-upload-forms.tsx','components/store-batch.tsx','components/product-tag-create.tsx','components/parent-product-browser.tsx'])assert.doesNotMatch(fs.readFileSync(file,'utf8'),/router\.refresh\(\)/,file);
+test('Server Action modal mutations rely on action revalidation without duplicate client refreshes',()=>{
+ // Uploads now use HTTP requests; their one refresh per attempt is exercised in upload-ui.test.cjs.
+ for(const file of ['components/asset-detail-modal.tsx','components/asset-commands.tsx','components/store-batch.tsx','components/product-tag-create.tsx','components/parent-product-browser.tsx'])assert.doesNotMatch(fs.readFileSync(file,'utf8'),/router\.refresh\(\)/,file);
 });
 test('product type aggregation composes with categories and excludes unclassified/shared assets',()=>{
  const {filterStoreAssetsByProductType}=load('lib/asset-filters.ts');

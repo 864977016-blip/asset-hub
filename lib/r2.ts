@@ -21,12 +21,14 @@ export async function optimizeAndUploadImage(file: File, prefix: string, mark?: 
  const key = `${prefix}/${randomUUID()}.webp`;await client().send(new PutObjectCommand({ Bucket: config().bucket, Key: key, Body: output.data, ContentType: "image/webp" }));mark?.("r2");
  return { key, mimeType: "image/webp", sizeBytes: output.data.byteLength, width: output.info.width, height: output.info.height, originalName: file.name || "image" };
 }
-export async function uploadCollectedImage(file: File, prefix: string, id: string, beforeUpload?: (image: { key:string; mimeType:string; sizeBytes:number; width:number; height:number; originalName:string }) => Promise<void>) {
- const output = await compressImage(file);
+export async function uploadCollectedImage(file: File, prefix: string, id: string, beforeUpload?: (image: { key:string; mimeType:string; sizeBytes:number; width:number; height:number; originalName:string }) => Promise<void>, mark?: (stage: "file-read" | "sharp" | "r2" | "r2-start") => void) {
+ const output = await compressImage(file, mark);
  const key = `${prefix}/${id}.webp`;
  const image={ key, mimeType:"image/webp", sizeBytes:output.data.byteLength, width:output.info.width, height:output.info.height, originalName:file.name||"image" };
  await beforeUpload?.(image);
+ mark?.("r2-start");
  await client().send(new PutObjectCommand({ Bucket: config().bucket, Key: key, Body: output.data, ContentType: "image/webp" }));
+ mark?.("r2");
  return image;
 }
 export async function removeObject(key: string) { await client().send(new DeleteObjectCommand({ Bucket: config().bucket, Key: key })); }

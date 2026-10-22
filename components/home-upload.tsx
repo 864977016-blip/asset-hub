@@ -28,9 +28,10 @@ export function HomeUploadProvider({ stores, tags, people, children, storeTags =
   const toast = useToast();
   const active = state.step !== "closed";
   const receive = useCallback((file: File, sourceUrl?: string) => dispatch({ type: "open", file, sourceUrl }), []);
+  const receiveImages=useCallback((files:File[],sourceUrl?:string)=>dispatch({type:"open",files,sourceUrl}),[]);
   const unsupported = useCallback(() => toast({ message: "未取得图片文件，请复制图片后粘贴或选择本地图片。", error: true }), [toast]);
   useClipboardImage(receive, captureImages && !active);
-  const { isDragging } = usePageImageDrop(receive, unsupported, (captureImages || captureDrop) && !active, true);
+  const { isDragging } = usePageImageDrop(receive, unsupported, (captureImages || captureDrop) && !active, true,receiveImages);
   useEffect(() => {
     if (!active) return;
     const overflow = document.body.style.overflow;
@@ -53,8 +54,8 @@ export function HomeUploadProvider({ stores, tags, people, children, storeTags =
       { id: "store" as const, title: state.file ? "店铺素材" : "添加店铺素材", description: "保存指定 Amazon 店铺资产" },
     ].map(target => <button type="button" key={target.id} onClick={() => dispatch({ type: "target", target: target.id })} className="block w-full rounded-xl border border-zinc-200 p-4 text-left transition hover:border-orange-brand hover:bg-orange-brand/5"><span className="font-semibold">{target.title}</span><span className="mt-1 block text-sm text-zinc-500">{target.description}</span></button>)}</div></TargetDialog>}
     {state.step === "store-picker" && <TargetDialog title="选择店铺" onClose={close}><button type="button" onClick={() => dispatch({ type: "back" })} className="mb-4 text-sm text-zinc-500 hover:text-orange-brand">← 返回保存位置</button><div className="grid gap-3 sm:grid-cols-2">{availableStores.map(store => <button key={store.id} type="button" onClick={() => dispatch({ type: "store", id: store.id })} className="rounded-xl border border-zinc-200 p-4 text-left font-medium transition hover:border-orange-brand hover:bg-orange-brand/5">{store.name}</button>)}</div>{!availableStores.length && <p className="py-8 text-center text-sm text-zinc-500">还没有店铺。<Link href="/stores" onClick={close} className="text-orange-brand">前往管理店铺 →</Link></p>}</TargetDialog>}
-    {state.step === "inspiration" && <InspirationModal open initialFile={state.file} initialSourceUrl={state.sourceUrl} tags={tags} onClose={close} />}
-    {state.step === "shared" && <SharedAssetModal open initialFile={state.file} stores={availableStores} people={people} initialPeople={initialPeople} onUploaded={uploaded} onClose={close} />}
-    {state.step === "store" && state.storeId && <StoreAssetModal key={state.storeId} open initialFile={state.file} storeId={state.storeId} people={people} initialPeople={initialPeople} onUploaded={uploaded} onClose={close} />}
+    {state.step === "inspiration" && <InspirationModal open initialFile={state.file} initialFiles={state.files} initialSourceUrl={state.sourceUrl} tags={tags} onClose={close} />}
+    {state.step === "shared" && <SharedAssetModal open initialFile={state.file} initialFiles={state.files} stores={availableStores} people={people} initialPeople={initialPeople} onUploaded={uploaded} onClose={close} />}
+    {state.step === "store" && state.storeId && <StoreAssetModal key={state.storeId} open initialFile={state.file} initialFiles={state.files} storeId={state.storeId} people={people} initialPeople={initialPeople} onUploaded={uploaded} onClose={close} />}
   </HomeUploadContext.Provider>;
 }

@@ -33,6 +33,16 @@ test('extension and website use the same WebP compression and metadata',async()=
   assert.equal(result.width,meta.width);assert.equal(result.height,meta.height);
  }
  assert.deepEqual(uploads[0].Body,uploads[1].Body);
+ const expected=await sharp(source,{failOn:'error'}).rotate().resize({width:2400,height:2400,fit:'inside',withoutEnlargement:true}).webp({quality:83}).toBuffer();assert.deepEqual(uploads[0].Body,expected);
+});
+
+test('EXIF orientation is applied before WebP storage and real local Sharp stages are timed',async()=>{
+ const {r2,uploads}=storage();
+ const input=await sharp({create:{width:300,height:120,channels:3,background:'#ff6b00'}}).jpeg().withMetadata({orientation:6}).toBuffer();
+ const started=performance.now(),stages=[];let previous=started;
+ const image=await r2.uploadCollectedImage(new File([input],'rotated.jpg',{type:'image/jpeg'}),'inspirations','rotated',async()=>{},stage=>{const now=performance.now();stages.push({stage,ms:Math.round(now-previous)});previous=now;});
+ assert.equal(image.width,120);assert.equal(image.height,300);assert.equal(image.sizeBytes,uploads[0].Body.length);assert.deepEqual(stages.map(item=>item.stage),['file-read','sharp','r2-start','r2']);
+ console.info('LOCAL synthetic image / mocked R2 only:',stages);
 });
 
 test('small extension image is never enlarged and original size limit is enforced',async()=>{

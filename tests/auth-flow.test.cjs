@@ -1,6 +1,6 @@
 const fs=require('node:fs'),vm=require('node:vm'),path=require('node:path'),assert=require('node:assert/strict'),test=require('node:test'),ts=require('typescript'),{PassThrough}=require('node:stream');
 function load(file,overrides={},globals={}){
- const ctx={exports:{},URL,console,...globals,require(name){if(name in overrides)return overrides[name];if(name==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};if(name.startsWith('@/'))return load(name.slice(2)+'.ts',overrides,globals);if(name==='next/link')return 'a';return require(name)}};
+ const ctx={exports:{},URL,console,performance,...globals,require(name){if(name in overrides)return overrides[name];if(name==='react/jsx-runtime')return{jsx:(type,props)=>({type,props}),jsxs:(type,props)=>({type,props})};if(name.startsWith('@/'))return load(name.slice(2)+'.ts',overrides,globals);if(name==='next/link')return 'a';return require(name)}};
  vm.runInNewContext(ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText,ctx);return ctx.exports;
 }
 function nodes(tree,predicate){if(!tree||typeof tree!=='object')return[];return [...(predicate(tree)?[tree]:[]),...[tree.props?.children].flat(Infinity).flatMap(c=>nodes(c,predicate))]}
@@ -48,8 +48,19 @@ test('middleware permits exact recovery routes and keeps application pages authe
  const {middleware}=load('middleware.ts',{'next/server':{NextResponse:next},'@supabase/ssr':{createServerClient:()=>({rpc:async()=>({data:true,error:null}),auth:{getClaims:async()=>({data:authenticated?{claims:{sub:'u'}}:null})}})}},{process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://example.test',NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'public'}}});
  const request=p=>{const url=new URL('https://team.example.test'+p);url.clone=()=>new URL(url);return{nextUrl:url,cookies:{getAll:()=>[]}}};
  for(const p of ['/login','/register','/auth/confirm','/forgot-password','/auth/recovery','/reset-password'])assert.ok(!(await middleware(request(p))).redirect);
+ assert.ok(!(await middleware(request('/api/extension/assets'))).redirect); // Bearer authentication is enforced in this route.
  for(const p of ['/','/library','/shared','/stores','/workstations','/handbook','/handbook/prompts'])assert.equal((await middleware(request(p))).redirect,'/login');
  authenticated=true;assert.equal((await middleware(request('/login'))).redirect,'/');assert.ok(!(await middleware(request('/reset-password'))).redirect);assert.ok(!(await middleware(request('/'))).redirect);
+});
+test('extension upload route rejects missing and inactive bearer tokens before R2 access',async()=>{
+ let reads=0;
+ const {POST}=load('app/api/extension/assets/route.ts',{
+  '@supabase/supabase-js':{createClient:()=>({auth:{getUser:async()=>({data:{user:{id:'u'}},error:null})},rpc:async()=>({data:false,error:null})})},
+  '@/lib/r2':{uploadCollectedImage:async()=>{reads++;},removeObject:async()=>{}},'next/cache':{revalidatePath(){}}
+ },{Request,Response,FormData,File,process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://example.test',NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'public'}}});
+ assert.equal((await POST(new Request('http://localhost/api/extension/assets',{method:'POST'}))).status,401);
+ assert.equal((await POST(new Request('http://localhost/api/extension/assets',{method:'POST',headers:{Authorization:'Bearer invalid'}}))).status,403);
+ assert.equal(reads,0);
 });
 
 test('registration sends only username and invitation metadata, never client role; email confirmation and failures are handled',async()=>{

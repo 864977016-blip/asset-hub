@@ -1,7 +1,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),ts=require('typescript');
 
 function route(failTable=null){
- const rows={profiles:[{id:'user-1',is_disabled:false}],stores:[{id:'22222222-2222-4222-8222-222222222222',archived_at:null}],parent_products:[],production_people:[],store_assets:[],asset_files:[],store_asset_production_people:[],inspirations:[],inspiration_tags:[],tags:[]},calls={r2:0,removed:0};
+ const rows={profiles:[{id:'user-1',is_disabled:false}],stores:[{id:'22222222-2222-4222-8222-222222222222',archived_at:null}],parent_products:[],production_people:[],store_assets:[],asset_files:[],store_asset_production_people:[],store_asset_tags:[],store_tags:[],shared_assets:[],shared_asset_production_people:[],shared_asset_stores:[],activities:[],inspirations:[],inspiration_tags:[],tags:[]},calls={r2:0,removed:0};
  const s={auth:{getUser:async()=>({data:{user:{id:'user-1'}},error:null})},rpc:async()=>({data:true,error:null}),from(table){
   let filters=[],operation='select',value,returning=false;
   const q={select(){returning=true;return q},eq(key,item){filters.push(row=>row[key]===item);return q},is(key,item){filters.push(row=>row[key]===item);return q},in(key,items){filters.push(row=>items.includes(row[key]));return q},insert(item){operation='insert';value=item;return q},update(item){operation='update';value=item;return q},delete(){operation='delete';return q},single(){return Promise.resolve(run(true))},maybeSingle(){return Promise.resolve(run(true))},then(resolve){return Promise.resolve(run(false)).then(resolve)}};
@@ -12,8 +12,8 @@ function route(failTable=null){
    return{data:one?matched[0]||null:matched,error:null};
   }return q;
  }};
- const overrides={'@supabase/supabase-js':{createClient:()=>s},'next/cache':{revalidatePath(){}},'@/lib/r2':{async uploadCollectedImage(file,prefix,id,beforeUpload){const image={key:`${prefix}/${id}.webp`,mimeType:'image/webp',sizeBytes:42,width:16,height:16,originalName:file.name};await beforeUpload(image);calls.r2++;return image;},async removeObject(){calls.removed++;}}};
- const context={exports:{},require:name=>overrides[name]||require(name),Request,Response,FormData,File,URL,console:{error(){}},process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://example.test',NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'public'}}};
+ const overrides={'@supabase/supabase-js':{createClient:()=>s},'@/lib/supabase/server':{createClient:async()=>s},'next/server':{after:task=>task()},'next/cache':{revalidatePath(){}},'@/lib/r2':{async uploadCollectedImage(file,prefix,id,beforeUpload){const image={key:`${prefix}/${id}.webp`,mimeType:'image/webp',sizeBytes:42,width:16,height:16,originalName:file.name};await beforeUpload(image);calls.r2++;return image;},async removeObject(){calls.removed++;}}};
+ const context={exports:{},require:name=>overrides[name]||require(name),Request,Response,FormData,File,URL,performance,console:{error(){},info(){}},process:{env:{NEXT_PUBLIC_SUPABASE_URL:'https://example.test',NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'public'}}};
  vm.runInNewContext(ts.transpileModule(fs.readFileSync('app/api/extension/assets/route.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,context);
  return{POST:context.exports.POST,rows,calls};
 }
@@ -48,4 +48,26 @@ test('disabled production person cannot be attached and relation failure cleans 
  assert.equal((await inactive.POST(request(ID,'store',base))).status,400);assert.equal(inactive.calls.r2,0);
  const broken=route('store_asset_production_people');broken.rows.production_people.push({id:person,disabled_at:null});
  assert.equal((await broken.POST(request(ID,'store',base))).status,500);assert.equal(broken.rows.store_assets.length,0);assert.equal(broken.calls.removed,1);
+});
+
+function websiteRequest(id,target,extra={}){const original=request(id,target,extra),headers=new Headers(original.headers);headers.delete('authorization');headers.set('origin','http://localhost');return new Request(original,{headers});}
+test('website cookie uploads reject cross-origin requests and preserve N distinct store assets with shared assignment',async()=>{
+ const d=route(),shop='22222222-2222-4222-8222-222222222222',person='55555555-5555-4555-8555-555555555555',parent='33333333-3333-4333-8333-333333333333';
+ d.rows.production_people.push({id:person,disabled_at:null});d.rows.parent_products.push({id:parent,store_id:shop,parent_product_tags:[{product_tag_id:'44444444-4444-4444-8444-444444444444'}]});
+ const ids=Array.from({length:5},(_,i)=>`11111111-1111-4111-8111-11111111111${i}`);
+ const extra={store_id:shop,parent_product_id:parent,category:'scene',production_person_ids:[person]};
+ const rejected=new Request(websiteRequest(ids[0],'store',extra),{headers:{Origin:'https://other.example'}});assert.equal((await d.POST(rejected)).status,401);assert.equal(d.calls.r2,0);
+ for(const id of ids)assert.equal((await d.POST(websiteRequest(id,'store',extra))).status,200);
+ assert.equal(d.rows.store_assets.length,5);assert.equal(d.rows.asset_files.length,5);assert.equal(d.rows.store_asset_production_people.length,5);
+ assert.ok(d.rows.store_assets.every(row=>row.parent_product_id===parent&&row.asset_category==='scene'));
+ for(const id of ids)assert.equal((await d.POST(websiteRequest(id,'store',extra))).status,200);
+ assert.equal(d.calls.r2,5);assert.equal(d.rows.asset_files.length,5);
+});
+test('website shared upload completes people/store associations and retries without duplicate files',async()=>{
+ const d=route(),shop='22222222-2222-4222-8222-222222222222',person='55555555-5555-4555-8555-555555555555';d.rows.production_people.push({id:person,disabled_at:null});
+ const extra={store_ids:[shop],production_person_ids:[person],description:'note'};
+ assert.equal((await d.POST(websiteRequest(ID,'shared',extra))).status,200);
+ assert.equal(d.rows.shared_assets[0].preview_file_id,ID);assert.equal(d.rows.shared_asset_stores.length,1);assert.equal(d.rows.shared_asset_production_people.length,1);
+ assert.equal((await d.POST(websiteRequest(ID,'shared',extra))).status,200);assert.equal(d.calls.r2,1);
+ const inactive=route();inactive.rows.production_people.push({id:person,disabled_at:'2026-01-01'});assert.equal((await inactive.POST(websiteRequest(ID,'shared',extra))).status,400);assert.equal(inactive.calls.r2,0);
 });
